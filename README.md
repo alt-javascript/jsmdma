@@ -4,17 +4,19 @@ An offline-first, multipurpose data sync API built on the [alt-javascript/boot](
 
 A single running server supports multiple **configured applications** (e.g. `todo`, `shopping-list`, your own custom apps). Each application has its own isolated user-scoped storage, optional JSON Schema validation, and smart conflict resolution that auto-merges non-overlapping line-level text changes instead of discarding one side.
 
+Users can belong to **organisations** — app-agnostic named groups. An org member can sync under the org's isolated namespace in any configured application by sending an `X-Org-Id` header.
+
 ## Architecture
 
 ```
 packages/
-  core/       — Isomorphic: HLC clock, field diff, merge engine, text auto-merge (no Node deps)
-  server/     — SyncRepository, SyncService, ApplicationRegistry, SchemaValidator
-  hono/       — AppSyncController wired into boot-hono CDI context
-  auth-core/  — JWT session, provider errors
-  auth-hono/  — AuthMiddlewareRegistrar, AuthController
-  auth-server/— UserRepository, AuthService
-  example/    — Offline-first demo (run.js) and multi-app demo (run-apps.js)
+  core/        — Isomorphic: HLC clock, field diff, merge engine, text auto-merge (no Node deps)
+  server/      — SyncRepository, SyncService, ApplicationRegistry, SchemaValidator
+  hono/        — AppSyncController wired into boot-hono CDI context
+  auth-core/   — JWT session, provider errors
+  auth-hono/   — AuthMiddlewareRegistrar, AuthController, OrgController
+  auth-server/ — UserRepository, AuthService, OrgRepository, OrgService
+  example/     — Offline-first demo (run.js) and multi-app + org demo (run-apps.js)
 ```
 
 **Technology stack:**
@@ -178,6 +180,87 @@ Storage keys are namespaced as `{userId}:{application}:{collection}` (colons in 
 
 ---
 
+## Organisations (M004)
+
+Organisations are app-agnostic named groups. A user creates an org and becomes its first `org-admin`. Org admins can add/remove members and promote or demote other members. Any member can sync under the org's namespace in any configured application by sending the `X-Org-Id` header.
+
+### Org Endpoints
+
+All org endpoints require a valid JWT.
+
+| Method | Path | Requires | Description |
+|---|---|---|---|
+| `POST` | `/orgs` | JWT | Create org. Body: `{ name }`. Creator becomes `org-admin`. Returns `{ orgId, name, role }`. |
+| `GET` | `/orgs` | JWT | List all orgs the caller belongs to. |
+| `GET` | `/orgs/:orgId/members` | membership | List all members of an org. |
+| `POST` | `/orgs/:orgId/members` | org-admin | Add a member. Body: `{ userId, role? }`. Role defaults to `member`. |
+| `PATCH` | `/orgs/:orgId/members/:userId` | org-admin | Change a member's role. Body: `{ role }`. Returns `409` if demoting the last org-admin. |
+| `DELETE` | `/orgs/:orgId/members/:userId` | org-admin | Remove a member. Returns `409` if removing the last org-admin. |
+
+**Roles:** `org-admin` — full management rights. `member` — read/write access to org data, read-only to member list.
+
+### Org-Scoped Sync
+
+To sync documents into an org's namespace, add the `X-Org-Id` header to any `POST /:application/sync` request:
+
+```http
+POST /todo/sync
+Authorization: Bearer <token>
+X-Org-Id: <orgId>
+Content-Type: application/json
+
+{ "collection": "tasks", "clientClock": "...", "changes": [...] }
+```
+
+- **Member check:** The server performs a live lookup — only members of the org can use its namespace.
+- **Non-member:** `403 { error: 'Not a member of organisation: ...' }`
+- **No header:** Personal namespace (unchanged behaviour)
+
+### Storage Namespace Layout
+
+```
+Personal sync (no X-Org-Id):
+  {userId}:{application}:{collection}
+  e.g.  alice-uuid:todo:tasks
+
+Org-scoped sync (X-Org-Id: <orgId>):
+  org:{orgId}:{application}:{collection}
+  e.g.  org:3f7b...a1:todo:tasks
+         org:3f7b...a1:shopping-list:lists
+
+Key properties:
+- org: prefix is unambiguous — userIds are UUIDs and never start with 'org:'
+- Same orgId across different applications → isolated namespaces per app
+- Personal and org namespaces are completely isolated even for the same user
+```
+
+### CDI Context Assembly (with Orgs)
+
+```js
+import {
+  UserRepository, AuthService,
+  OrgRepository, OrgService,
+} from '@alt-javascript/data-api-auth-server';
+import { OrgController } from '@alt-javascript/data-api-auth-hono';
+
+const context = new Context([
+  // ... sync components from M003 context ...
+  { Reference: UserRepository,  name: 'userRepository',  scope: 'singleton' },
+  { Reference: AuthService,     name: 'authService',     scope: 'singleton',
+    properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
+  { Reference: OrgRepository,   name: 'orgRepository',   scope: 'singleton' },
+  { Reference: OrgService,      name: 'orgService',      scope: 'singleton' },
+  // ↓ Auth middleware MUST come before all controllers
+  { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
+    properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
+  { Reference: AppSyncController, name: 'appSyncController', scope: 'singleton' },
+  { Reference: AuthController,    name: 'authController',    scope: 'singleton' },
+  { Reference: OrgController,     name: 'orgController',     scope: 'singleton' },
+]);
+```
+
+---
+
 ## HLC Format
 
 HLC (Hybrid Logical Clock) is a causality-preserving clock that combines wall time with a logical counter. This project encodes it as a zero-padded hex string:
@@ -272,8 +355,12 @@ node packages/example/run-apps.js
   ✓ Text auto-merge attempted on concurrent notes edits
   ✓ Shopping list (no schema) syncs free-form documents
   ✓ Shopping list user isolation — Bob cannot see Alice's lists
+  ✓ Org created; Bob added as member
+  ✓ Alice + Bob share documents via x-org-id header
+  ✓ Carol (non-member) rejected with 403
+  ✓ Org namespace isolated from personal namespace
 
-  Multi-app, multi-user sync working correctly.
+  Multi-app, multi-user, org-scoped sync working correctly.
 ```
 
 ---
@@ -286,9 +373,9 @@ node packages/example/run-apps.js
 | `packages/server` | `@alt-javascript/data-api-server` — SyncRepository, SyncService, ApplicationRegistry, SchemaValidator |
 | `packages/hono` | `@alt-javascript/data-api-hono` — AppSyncController, boot-hono wiring |
 | `packages/auth-core` | `@alt-javascript/data-api-auth-core` — JWT session, provider errors |
-| `packages/auth-hono` | `@alt-javascript/data-api-auth-hono` — AuthMiddlewareRegistrar, AuthController |
-| `packages/auth-server` | `@alt-javascript/data-api-auth-server` — UserRepository, AuthService |
-| `packages/example` | Runnable demos: `run.js` (offline-first), `run-apps.js` (multi-app) |
+| `packages/auth-hono` | `@alt-javascript/data-api-auth-hono` — AuthMiddlewareRegistrar, AuthController, OrgController |
+| `packages/auth-server` | `@alt-javascript/data-api-auth-server` — UserRepository, AuthService, OrgRepository, OrgService |
+| `packages/example` | Runnable demos: `run.js` (offline-first), `run-apps.js` (multi-app + orgs) |
 
 ---
 
@@ -405,4 +492,5 @@ Expected output includes:
 | M001 | ✅ Complete | Sync engine, HLC, field-level merge, Hono server, example |
 | M002 | ✅ Complete | OAuth identity: Google, Microsoft, Apple, GitHub → UUID |
 | M003 | ✅ Complete | Application-scoped sync, text auto-merge, JSON Schema validation |
-| M004 | Planned | Cloud hosting evaluation and deployment adapter |
+| M004 | ✅ Complete | Organisation tenancy — app-agnostic orgs, membership, role management, X-Org-Id header sync |
+| M005 | Planned | Cloud hosting evaluation and deployment adapter |

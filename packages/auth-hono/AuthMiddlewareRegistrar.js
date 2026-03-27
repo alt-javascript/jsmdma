@@ -11,6 +11,8 @@
  * Protected paths:
  *   /auth/me            — GET current user identity
  *   /:application/sync  — POST sync endpoint (M003)
+ *   /orgs               — POST create org, GET list orgs (M004)
+ *   /orgs/*             — all org member management routes (M004)
  *
  * CDI autowires:
  *   this.jwtSecret — JWT secret string
@@ -33,10 +35,12 @@ export default class AuthMiddlewareRegistrar {
   routes(app) {
     if (!this.jwtSecret) return;
     const mw = authMiddleware(this.jwtSecret, this.logger);
-    app.use('/auth/me',          mw);
-    app.use('/auth/link/*',      mw);
-    app.use('/auth/providers/*', mw);
+    app.use('/auth/me',           mw);
+    app.use('/auth/link/*',       mw);
+    app.use('/auth/providers/*',  mw);
     app.use('/:application/sync', mw);
-    this.logger?.debug?.('[AuthMiddlewareRegistrar] JWT middleware applied to /auth/me, /auth/link/*, /auth/providers/*, /:application/sync');
+    app.use('/orgs',              mw);
+    app.use('/orgs/*',            mw);
+    this.logger?.debug?.('[AuthMiddlewareRegistrar] JWT middleware applied to /auth/me, /auth/link/*, /auth/providers/*, /:application/sync, /orgs, /orgs/*');
   }
 }

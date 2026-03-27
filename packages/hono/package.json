@@ -29,6 +29,7 @@
     "@alt-javascript/jsnosqlc-memory": "^1.0.1",
     "@alt-javascript/data-api-auth-core": "*",
     "@alt-javascript/data-api-auth-hono": "*",
+    "@alt-javascript/data-api-auth-server": "*",
     "chai": "^4.3.7",
     "mocha": "^11.7.5"
   },

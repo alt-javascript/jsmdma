@@ -13,6 +13,9 @@ import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
 import { SyncRepository, SyncService, ApplicationRegistry, SchemaValidator } from '@alt-javascript/data-api-server';
 import { AuthMiddlewareRegistrar } from '@alt-javascript/data-api-auth-hono';
+import {
+  OrgRepository, OrgService, UserRepository,
+} from '@alt-javascript/data-api-auth-server';
 import { JwtSession } from '@alt-javascript/data-api-auth-core';
 import { HLC } from '@alt-javascript/data-api-core';
 import AppSyncController from '../AppSyncController.js';
@@ -62,6 +65,9 @@ async function buildContext() {
       properties: [{ name: 'applications', path: 'applications' }] },
     { Reference: SchemaValidator, name: 'schemaValidator', scope: 'singleton',
       properties: [{ name: 'applications', path: 'applications' }] },
+    { Reference: UserRepository,  name: 'userRepository',  scope: 'singleton' },
+    { Reference: OrgRepository,   name: 'orgRepository',   scope: 'singleton' },
+    { Reference: OrgService,      name: 'orgService',      scope: 'singleton' },
     // Auth middleware MUST come before AppSyncController
     { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
       properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
@@ -401,6 +407,158 @@ describe('AppSyncController (CDI integration)', () => {
       const ctrl = appCtx.get('appSyncController');
       assert.instanceOf(ctrl.schemaValidator, SchemaValidator);
     });
+  });
+
+  // ── org-scoped sync via x-org-id header ───────────────────────────────────
+
+  describe('POST /:application/sync — x-org-id org-scoped sync', () => {
+
+    // Helper: seed a user directly (avoids OAuth flow)
+    async function seedUser(userId) {
+      const userRepo = appCtx.get('userRepository');
+      await userRepo._users().store(userId, {
+        userId, email: `${userId}@test.com`, providers: [],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      });
+    }
+
+    // Helper: create org via OrgService and return orgId
+    async function createOrg(creatorId, name) {
+      const orgSvc = appCtx.get('orgService');
+      const { org } = await orgSvc.createOrg(creatorId, name);
+      return org.orgId;
+    }
+
+    // Helper: add member via OrgService
+    async function addMember(adminId, orgId, userId) {
+      const orgSvc = appCtx.get('orgService');
+      await orgSvc.addMember(adminId, orgId, userId);
+    }
+
+    function orgSyncPost(application, body, token, orgId) {
+      const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+      if (orgId) headers['x-org-id'] = orgId;
+      return app.request(`/${application}/sync`, {
+        method: 'POST', body: JSON.stringify(body), headers,
+      });
+    }
+
+    it('non-member presenting x-org-id receives 403', async () => {
+      await seedUser('alice');
+      await seedUser('bob');
+      const aliceToken = await makeToken('alice');
+      const bobToken   = await makeToken('bob');
+      const orgId      = await createOrg('alice', 'Test Org');
+      // bob is not a member
+
+      const res = await orgSyncPost('shopping-list', {
+        collection: 'items', clientClock: HLC.zero(), changes: [],
+      }, bobToken, orgId);
+
+      assert.equal(res.status, 403);
+    });
+
+    it('member with x-org-id receives 200', async () => {
+      await seedUser('alice');
+      const token = await makeToken('alice');
+      const orgId = await createOrg('alice', 'Test Org');
+
+      const res = await orgSyncPost('shopping-list', {
+        collection: 'items', clientClock: HLC.zero(), changes: [],
+      }, token, orgId);
+
+      assert.equal(res.status, 200);
+    });
+
+    it('two members of same org share documents via x-org-id', async () => {
+      await seedUser('alice');
+      await seedUser('bob');
+      const aliceToken = await makeToken('alice');
+      const bobToken   = await makeToken('bob');
+      const orgId      = await createOrg('alice', 'Shared Org');
+      await addMember('alice', orgId, 'bob');
+
+      const t1 = HLC.tick(HLC.zero(), Date.now());
+
+      // Alice pushes a shared doc to the org namespace
+      await orgSyncPost('shopping-list', {
+        collection: 'groceries',
+        clientClock: HLC.zero(),
+        changes: [{
+          key: 'list-1',
+          doc: { name: 'Weekend shop' },
+          fieldRevs: { name: t1 },
+          baseClock: HLC.zero(),
+        }],
+      }, aliceToken, orgId);
+
+      // Bob pulls from the org namespace — should see Alice's doc
+      const res  = await orgSyncPost('shopping-list', {
+        collection: 'groceries', clientClock: HLC.zero(), changes: [],
+      }, bobToken, orgId);
+
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.lengthOf(body.serverChanges, 1, 'Bob should see the doc Alice pushed');
+      assert.equal(body.serverChanges[0].name, 'Weekend shop');
+    });
+
+    it('org namespace is isolated from personal namespace', async () => {
+      await seedUser('alice');
+      const token = await makeToken('alice');
+      const orgId = await createOrg('alice', 'Isolated Org');
+
+      const t1 = HLC.tick(HLC.zero(), Date.now());
+
+      // Alice pushes to org namespace
+      await orgSyncPost('shopping-list', {
+        collection: 'items',
+        clientClock: HLC.zero(),
+        changes: [{
+          key: 'item-1', doc: { name: 'Org item' },
+          fieldRevs: { name: t1 }, baseClock: HLC.zero(),
+        }],
+      }, token, orgId);
+
+      // Alice pulls from personal namespace (no x-org-id) — should be empty
+      const res = await syncPost(app, 'shopping-list', {
+        collection: 'items', clientClock: HLC.zero(), changes: [],
+      }, token);
+
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.isEmpty(body.serverChanges, 'personal namespace must not see org documents');
+    });
+
+    it('same org + different applications produce isolated namespaces', async () => {
+      await seedUser('alice');
+      const token = await makeToken('alice');
+      const orgId = await createOrg('alice', 'Multi-App Org');
+
+      const t1 = HLC.tick(HLC.zero(), Date.now());
+
+      // Push to /todo/sync with org header
+      await orgSyncPost('todo', {
+        collection: 'tasks',
+        clientClock: HLC.zero(),
+        changes: [{
+          key: 'task-1',
+          doc: { title: 'Org todo task', done: false },
+          fieldRevs: { title: t1, done: t1 },
+          baseClock: HLC.zero(),
+        }],
+      }, token, orgId);
+
+      // Pull from /shopping-list/sync with same org header — different app, different namespace
+      const res = await orgSyncPost('shopping-list', {
+        collection: 'tasks', clientClock: HLC.zero(), changes: [],
+      }, token, orgId);
+
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.isEmpty(body.serverChanges, 'different applications must have isolated org namespaces');
+    });
+
   });
 
 });

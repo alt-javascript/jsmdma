@@ -13,14 +13,23 @@
  * payload is read from the Hono context via honoCtx.get('user'); requests
  * without a valid token are rejected with 401.
  *
- * Storage isolation: userId and application are passed to SyncService, which
- * namespaces the internal collection key as {userId}:{application}:{collection}.
+ * Storage namespacing:
+ *   Personal (no x-org-id header):
+ *     {userId}:{application}:{collection}  — via namespaceKey()
+ *   Org-scoped (x-org-id header present):
+ *     org:{orgId}:{application}:{collection}
+ *     The org: prefix is unambiguous — userIds are UUIDs and never start with 'org:'.
+ *     Requires live isMember check via OrgService; 403 on non-member.
  *
  * CDI autowiring (by name):
  *   this.syncService          — SyncService instance
  *   this.applicationRegistry  — ApplicationRegistry instance
+ *   this.schemaValidator      — SchemaValidator instance
+ *   this.orgService           — OrgService instance (optional; 500 if header present but not wired)
  *   this.logger               — optional logger
  */
+import { namespaceKey } from '@alt-javascript/data-api-server';
+
 export default class AppSyncController {
   static __routes = [
     { method: 'GET',  path: '/health',            handler: 'health' },
@@ -31,6 +40,7 @@ export default class AppSyncController {
     this.syncService         = null; // CDI autowired
     this.applicationRegistry = null; // CDI autowired
     this.schemaValidator     = null; // CDI autowired
+    this.orgService          = null; // CDI autowired (required for org-scoped sync)
     this.logger              = null; // CDI autowired
   }
 
@@ -43,10 +53,10 @@ export default class AppSyncController {
 
   /**
    * POST /:application/sync
-   * @param {{ body: Object, params: Object, honoCtx: import('hono').Context }} request
+   * @param {{ body: Object, params: Object, headers: Object, honoCtx: import('hono').Context }} request
    */
   async sync(request) {
-    const { body, params, honoCtx } = request;
+    const { body, params, headers, honoCtx } = request;
 
     // ── Auth guard ────────────────────────────────────────────────────────────
     const userPayload = honoCtx?.get?.('user') ?? null;
@@ -79,8 +89,31 @@ export default class AppSyncController {
       return { statusCode: 400, body: { error: 'Missing required field: clientClock' } };
     }
 
+    // ── Org-scope resolution ──────────────────────────────────────────────────
+    // x-org-id header (lowercased by HTTP/2; check both casings for HTTP/1.1 compat)
+    const orgId = headers?.['x-org-id'] ?? headers?.['X-Org-Id'] ?? null;
+    let storageCollection;
+
+    if (orgId) {
+      if (!this.orgService) {
+        this.logger?.error?.('[AppSyncController] x-org-id header present but orgService not wired');
+        return { statusCode: 500, body: { error: 'Org-scoped sync is not configured' } };
+      }
+      const isMember = await this.orgService.isMember(userId, orgId);
+      if (!isMember) {
+        this.logger?.debug?.(`[AppSyncController] org membership denied orgId=${orgId} userId=${userId}`);
+        return { statusCode: 403, body: { error: `Not a member of organisation: ${orgId}` } };
+      }
+      storageCollection = `org:${orgId}:${application}:${collection}`;
+      this.logger?.debug?.(
+        `[AppSyncController] org-scoped sync orgId=${orgId} userId=${userId} app=${application} storage=${storageCollection}`,
+      );
+    } else {
+      storageCollection = namespaceKey(userId, application, collection);
+    }
+
     this.logger?.debug?.(
-      `[AppSyncController] POST /${application}/sync userId=${userId} collection=${collection} clientClock=${clientClock} changes=${changes.length}`,
+      `[AppSyncController] POST /${application}/sync userId=${userId} collection=${collection} storage=${storageCollection} changes=${changes.length}`,
     );
 
     // ── Schema validation ─────────────────────────────────────────────────────
@@ -97,7 +130,9 @@ export default class AppSyncController {
       }
     }
 
-    const result = await this.syncService.sync(collection, clientClock, changes, userId, application);
+    // Pass the pre-computed storageCollection as 'collection'; omit userId/application
+    // so SyncService uses the provided key as-is (fallback path when userId is undefined).
+    const result = await this.syncService.sync(storageCollection, clientClock, changes);
     return result;
   }
 }

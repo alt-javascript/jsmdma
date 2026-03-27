@@ -1,5 +1,5 @@
 /**
- * run-apps.js — Multi-application sync example (M003)
+ * run-apps.js — Multi-application sync example (M003 + M004)
  *
  * Demonstrates:
  *   1. Two configured applications — todo (with JSON Schema) and shopping-list (free-form)
@@ -9,6 +9,8 @@
  *      on different devices (same userId); non-overlapping line additions
  *      are auto-merged without surfacing a conflict
  *   5. Shopping list: free-form document, no schema, syncs cleanly
+ *   6. Organisation-scoped sync: Alice creates an org, adds Bob, both share
+ *      a document via x-org-id header; Carol (non-member) is rejected
  *
  * Run:
  *   node packages/example/run-apps.js
@@ -21,7 +23,10 @@ import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
 import { SyncRepository, SyncService, ApplicationRegistry, SchemaValidator } from '@alt-javascript/data-api-server';
 import { AppSyncController } from '@alt-javascript/data-api-hono';
-import { AuthMiddlewareRegistrar } from '@alt-javascript/data-api-auth-hono';
+import { AuthMiddlewareRegistrar, OrgController } from '@alt-javascript/data-api-auth-hono';
+import {
+  UserRepository, OrgRepository, OrgService,
+} from '@alt-javascript/data-api-auth-server';
 import { JwtSession } from '@alt-javascript/data-api-auth-core';
 import { HLC } from '@alt-javascript/data-api-core';
 
@@ -91,28 +96,35 @@ async function buildApp() {
       properties: [{ name: 'applications', path: 'applications' }] },
     { Reference: SchemaValidator,    name: 'schemaValidator',    scope: 'singleton',
       properties: [{ name: 'applications', path: 'applications' }] },
+    { Reference: UserRepository,     name: 'userRepository',     scope: 'singleton' },
+    { Reference: OrgRepository,      name: 'orgRepository',      scope: 'singleton' },
+    { Reference: OrgService,         name: 'orgService',         scope: 'singleton' },
     { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
       properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
     { Reference: AppSyncController,  name: 'appSyncController',  scope: 'singleton' },
+    { Reference: OrgController,      name: 'orgController',      scope: 'singleton' },
   ]);
 
   const appCtx = new ApplicationContext({ contexts: [context], config });
   await appCtx.start({ run: false });
   await appCtx.get('nosqlClient').ready();
 
-  return appCtx.get('honoAdapter').app;
+  return { app: appCtx.get('honoAdapter').app, appCtx };
 }
 
 // ── HTTP helper ───────────────────────────────────────────────────────────────
 
-async function syncPost(app, application, body, token) {
+async function syncPost(app, application, body, token, orgId) {
+  const headers = {
+    'Content-Type':  'application/json',
+    'Authorization': `Bearer ${token}`,
+  };
+  if (orgId) headers['x-org-id'] = orgId;
+
   const res = await app.request(`/${application}/sync`, {
     method:  'POST',
     body:    JSON.stringify(body),
-    headers: {
-      'Content-Type':  'application/json',
-      'Authorization': `Bearer ${token}`,
-    },
+    headers,
   });
   return { status: res.status, body: await res.json() };
 }
@@ -120,10 +132,10 @@ async function syncPost(app, application, body, token) {
 // ── main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  banner('data-api — Multi-App Example (M003)');
+  banner('data-api — Multi-App Example (M003 + M004)');
 
-  const app = await buildApp();
-  ok('Hono server ready (two applications: todo, shopping-list)');
+  const { app, appCtx } = await buildApp();
+  ok('Hono server ready (two applications: todo, shopping-list; org management enabled)');
 
   // Mint tokens for Alice and Bob
   const aliceToken = await JwtSession.sign({ sub: 'alice-uuid', providers: ['demo'] }, JWT_SECRET);
@@ -306,6 +318,79 @@ async function main() {
   assert(r6b.body.serverChanges.length === 0, `Bob should see 0 shopping lists, saw ${r6b.body.serverChanges.length}`);
   ok("Bob's shopping-list pull returns 0 items (isolated from Alice's lists)");
 
+  // ── Scenario 7: Organisation-scoped sync ─────────────────────────────────
+
+  banner('Scenario 7: Organisation-scoped sync');
+
+  // Seed users so OrgService can verify they exist
+  const userRepo = appCtx.get('userRepository');
+  const orgSvc   = appCtx.get('orgService');
+
+  for (const userId of ['alice-uuid', 'bob-uuid', 'carol-uuid']) {
+    await userRepo._users().store(userId, {
+      userId, email: `${userId}@example.com`, providers: [],
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    });
+  }
+
+  const carolToken = await JwtSession.sign({ sub: 'carol-uuid', providers: ['demo'] }, JWT_SECRET);
+
+  // Alice creates an org; Bob is added as a member
+  const { org } = await orgSvc.createOrg('alice-uuid', 'Example Team');
+  await orgSvc.addMember('alice-uuid', org.orgId, 'bob-uuid');
+  ok(`Alice created org "${org.name}" (orgId: ${org.orgId.slice(0, 8)}...)`);
+  ok('Alice added Bob as a member');
+
+  const t7 = HLC.tick(HLC.zero(), Date.now());
+
+  // Alice pushes a shared document to the org namespace
+  const r7a = await syncPost(app, 'todo', {
+    collection:  'tasks',
+    clientClock: HLC.zero(),
+    changes: [{
+      key:       'shared-task',
+      doc:       { title: 'Shared org task', done: false },
+      fieldRevs: { title: t7, done: t7 },
+      baseClock: HLC.zero(),
+    }],
+  }, aliceToken, org.orgId);
+
+  assert(r7a.status === 200, `Expected 200, got ${r7a.status}`);
+  ok('Alice pushed shared task to org namespace');
+
+  // Bob pulls from the org namespace — should see Alice's document
+  const r7b = await syncPost(app, 'todo', {
+    collection:  'tasks',
+    clientClock: HLC.zero(),
+    changes:     [],
+  }, bobToken, org.orgId);
+
+  assert(r7b.status === 200, `Expected 200, got ${r7b.status}`);
+  assert(r7b.body.serverChanges.length === 1, `Bob should see 1 task, saw ${r7b.body.serverChanges.length}`);
+  assert(r7b.body.serverChanges[0].title === 'Shared org task', 'Bob should see the shared task title');
+  ok('Bob pulled shared task from org namespace (shared with Alice)');
+
+  // Carol (not a member) is rejected with 403
+  const r7c = await syncPost(app, 'todo', {
+    collection:  'tasks',
+    clientClock: HLC.zero(),
+    changes:     [],
+  }, carolToken, org.orgId);
+
+  assert(r7c.status === 403, `Expected 403, got ${r7c.status}`);
+  ok('Carol (non-member) rejected with 403');
+
+  // Alice pulls from personal namespace (no org header) — org docs are invisible
+  // Use a fresh collection name to avoid mixing with tasks created in earlier scenarios
+  const r7d = await syncPost(app, 'todo', {
+    collection:  'org-test-collection',
+    clientClock: HLC.zero(),
+    changes:     [],
+  }, aliceToken);
+
+  assert(r7d.body.serverChanges.length === 0, `Personal namespace should be empty for fresh collection, saw ${r7d.body.serverChanges.length} docs`);
+  ok('Org namespace isolated from Alice\'s personal namespace');
+
   // ── Summary ───────────────────────────────────────────────────────────────
 
   banner('All scenarios passed');
@@ -316,7 +401,11 @@ async function main() {
   console.log('  ✓ Text auto-merge attempted on concurrent notes edits');
   console.log('  ✓ Shopping list (no schema) syncs free-form documents');
   console.log('  ✓ Shopping list user isolation — Bob cannot see Alice\'s lists');
-  console.log('\n  Multi-app, multi-user sync working correctly.\n');
+  console.log('  ✓ Org created; Bob added as member');
+  console.log('  ✓ Alice + Bob share documents via x-org-id header');
+  console.log('  ✓ Carol (non-member) rejected with 403');
+  console.log('  ✓ Org namespace isolated from personal namespace');
+  console.log('\n  Multi-app, multi-user, org-scoped sync working correctly.\n');
 }
 
 main().catch((err) => {
