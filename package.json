@@ -1,0 +1,19 @@
+{
+  "name": "data-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "npm test --workspaces --if-present",
+    "test:core": "npm test -w packages/core",
+    "test:server": "npm test -w packages/server",
+    "test:hono": "npm test -w packages/hono",
+    "test:example": "npm test -w packages/example"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

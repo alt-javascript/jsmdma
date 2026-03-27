@@ -1,0 +1,37 @@
+{
+  "name": "@alt-javascript/data-api-server",
+  "version": "0.1.0",
+  "description": "Sync service and repository for data-api — CDI-managed, framework-agnostic",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "scripts": {
+    "test": "mocha --recursive test/**/*.spec.js"
+  },
+  "keywords": [
+    "alt-javascript",
+    "sync",
+    "nosql",
+    "offline-first"
+  ],
+  "dependencies": {
+    "@alt-javascript/data-api-core": "*",
+    "@alt-javascript/jsnosqlc-core": "^1.0.1",
+    "ajv": "^8.18.0"
+  },
+  "devDependencies": {
+    "@alt-javascript/jsnosqlc-memory": "^1.0.1",
+    "chai": "^4.3.7",
+    "mocha": "^11.7.5"
+  },
+  "license": "MIT",
+  "author": "Craig Parravicini",
+  "contributors": [
+    "Claude (Anthropic)"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}

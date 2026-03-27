@@ -1,0 +1,7 @@
+/**
+ * index.js — Public exports for @alt-javascript/data-api-auth-hono
+ */
+
+export { authMiddleware, getUser } from './authMiddleware.js';
+export { default as AuthController } from './AuthController.js';
+export { default as AuthMiddlewareRegistrar } from './AuthMiddlewareRegistrar.js';

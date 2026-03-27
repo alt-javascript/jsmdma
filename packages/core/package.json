@@ -1,0 +1,38 @@
+{
+  "name": "@alt-javascript/data-api-core",
+  "version": "0.1.0",
+  "description": "Isomorphic core for data-api: HLC revision clock, field-level diff, and merge engine",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "scripts": {
+    "test": "mocha --recursive test/**/*.spec.js"
+  },
+  "keywords": [
+    "alt-javascript",
+    "sync",
+    "hlc",
+    "crdt",
+    "offline-first",
+    "isomorphic"
+  ],
+  "devDependencies": {
+    "chai": "^4.3.7",
+    "mocha": "^11.7.5"
+  },
+  "license": "MIT",
+  "author": "Craig Parravicini",
+  "contributors": [
+    "Claude (Anthropic)"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alt-javascript/data-api.git",
+    "directory": "packages/core"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

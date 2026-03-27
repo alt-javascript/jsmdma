@@ -1,0 +1,47 @@
+{
+  "name": "@alt-javascript/data-api-auth-hono",
+  "version": "0.1.0",
+  "description": "Hono auth adapter for data-api — JWT middleware, OAuth routes, CDI wiring",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "scripts": {
+    "test": "mocha --recursive test/**/*.spec.js"
+  },
+  "keywords": [
+    "alt-javascript",
+    "hono",
+    "oauth",
+    "jwt",
+    "auth"
+  ],
+  "dependencies": {
+    "@alt-javascript/data-api-auth-core": "*",
+    "@alt-javascript/data-api-auth-server": "*",
+    "@alt-javascript/boot-hono": "3.0.7",
+    "@alt-javascript/boot-jsnosqlc": "3.0.7"
+  },
+  "devDependencies": {
+    "@alt-javascript/boot": "3.0.7",
+    "@alt-javascript/cdi": "3.0.7",
+    "@alt-javascript/config": "3.0.7",
+    "@alt-javascript/data-api-hono": "*",
+    "@alt-javascript/data-api-server": "*",
+    "@alt-javascript/jsnosqlc-memory": "^1.0.1",
+    "arctic": "3.7.0",
+    "hono": "^4.0.0",
+    "jose": "^6.0.0",
+    "chai": "^4.3.7",
+    "mocha": "^11.7.5"
+  },
+  "license": "MIT",
+  "author": "Craig Parravicini",
+  "contributors": [
+    "Claude (Anthropic)"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}
