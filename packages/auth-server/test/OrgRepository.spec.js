@@ -154,4 +154,26 @@ describe('OrgRepository', () => {
     assert.equal(members[0].userId, 'user-alice');
   });
 
+  // ── orgNames index ────────────────────────────────────────────────────────
+
+  describe('orgNames index', () => {
+    it('reserveName + nameExists round-trip: after reserveName, nameExists returns true', async () => {
+      const repo = await makeRepo();
+      await repo.reserveName('Acme Corp', 'org-1');
+      assert.isTrue(await repo.nameExists('Acme Corp'));
+    });
+
+    it('nameExists returns false for an unknown name', async () => {
+      const repo = await makeRepo();
+      assert.isFalse(await repo.nameExists('NonExistent Corp'));
+    });
+
+    it('releaseName: after reserve then release, nameExists returns false', async () => {
+      const repo = await makeRepo();
+      await repo.reserveName('Acme Corp', 'org-1');
+      await repo.releaseName('Acme Corp');
+      assert.isFalse(await repo.nameExists('Acme Corp'));
+    });
+  });
+
 });

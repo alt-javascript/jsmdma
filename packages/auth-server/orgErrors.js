@@ -39,3 +39,10 @@ export class NotMemberError extends Error {
     this.name = 'NotMemberError';
   }
 }
+
+export class DuplicateOrgNameError extends Error {
+  constructor(name) {
+    super(`Organisation name already taken: ${name}`);
+    this.name = 'DuplicateOrgNameError';
+  }
+}

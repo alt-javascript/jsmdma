@@ -21,8 +21,8 @@ import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
 import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
-import { SyncRepository, SyncService, ApplicationRegistry, SchemaValidator } from '@alt-javascript/data-api-server';
-import { AppSyncController } from '@alt-javascript/data-api-hono';
+import { SyncRepository, SyncService, ApplicationRegistry, SchemaValidator, DocumentIndexRepository } from '@alt-javascript/data-api-server';
+import { AppSyncController, DocIndexController } from '@alt-javascript/data-api-hono';
 import { AuthMiddlewareRegistrar, OrgController } from '@alt-javascript/data-api-auth-hono';
 import {
   UserRepository, OrgRepository, OrgService,
@@ -76,6 +76,9 @@ const APPLICATIONS_CONFIG = {
   'shopping-list': {
     description: 'Shopping lists (free-form, no schema)',
   },
+  'year-planner': {
+    description: 'Year planner (free-form documents)',
+  },
 };
 
 async function buildApp() {
@@ -85,6 +88,7 @@ async function buildApp() {
     'server':       { port: 0 },
     'auth':         { jwt: { secret: JWT_SECRET } },
     'applications': APPLICATIONS_CONFIG,
+    'orgs':         { registerable: true },
   });
 
   const context = new Context([
@@ -101,8 +105,11 @@ async function buildApp() {
     { Reference: OrgService,         name: 'orgService',         scope: 'singleton' },
     { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
       properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
+    { Reference: DocumentIndexRepository, name: 'documentIndexRepository', scope: 'singleton' },
     { Reference: AppSyncController,  name: 'appSyncController',  scope: 'singleton' },
-    { Reference: OrgController,      name: 'orgController',      scope: 'singleton' },
+    { Reference: OrgController,      name: 'orgController',      scope: 'singleton',
+      properties: [{ name: 'registerable', path: 'orgs.registerable' }] },
+    { Reference: DocIndexController, name: 'docIndexController', scope: 'singleton' },
   ]);
 
   const appCtx = new ApplicationContext({ contexts: [context], config });
@@ -112,7 +119,52 @@ async function buildApp() {
   return { app: appCtx.get('honoAdapter').app, appCtx };
 }
 
-// ── HTTP helper ───────────────────────────────────────────────────────────────
+/**
+ * Minimal app variant with org registration DISABLED — used in Scenario 12 to
+ * verify that POST /orgs returns 403 when orgs.registerable is absent.
+ */
+async function buildAppNoReg() {
+  const config = new EphemeralConfig({
+    'boot':         { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
+    'logging':      { level: { ROOT: 'error' } },
+    'server':       { port: 0 },
+    'auth':         { jwt: { secret: JWT_SECRET } },
+    'applications': APPLICATIONS_CONFIG,
+    // 'orgs' key intentionally absent → OrgController.registerable stays null → 403
+  });
+
+  const context = new Context([
+    ...honoStarter(),
+    ...jsnosqlcAutoConfiguration(),
+    { Reference: UserRepository,     name: 'userRepository',     scope: 'singleton' },
+    { Reference: OrgRepository,      name: 'orgRepository',      scope: 'singleton' },
+    { Reference: OrgService,         name: 'orgService',         scope: 'singleton' },
+    { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
+      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
+    { Reference: OrgController,      name: 'orgController',      scope: 'singleton' },
+    // OrgController has no registerable property injection → defaults to null → 403
+  ]);
+
+  const appCtx = new ApplicationContext({ contexts: [context], config });
+  await appCtx.start({ run: false });
+  await appCtx.get('nosqlClient').ready();
+
+  return { app: appCtx.get('honoAdapter').app, appCtx };
+}
+
+// ── HTTP helpers ──────────────────────────────────────────────────────────────
+
+async function orgPost(app, body, token) {
+  const res = await app.request('/orgs', {
+    method:  'POST',
+    body:    JSON.stringify(body),
+    headers: {
+      'Content-Type':  'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+  });
+  return { status: res.status, body: await res.json() };
+}
 
 async function syncPost(app, application, body, token, orgId) {
   const headers = {
@@ -125,6 +177,14 @@ async function syncPost(app, application, body, token, orgId) {
     method:  'POST',
     body:    JSON.stringify(body),
     headers,
+  });
+  return { status: res.status, body: await res.json() };
+}
+
+async function docIndexGet(app, application, docKey, token) {
+  const res = await app.request(`/docIndex/${application}/${docKey}`, {
+    method:  'GET',
+    headers: { Authorization: `Bearer ${token}` },
   });
   return { status: res.status, body: await res.json() };
 }
@@ -391,6 +451,110 @@ async function main() {
   assert(r7d.body.serverChanges.length === 0, `Personal namespace should be empty for fresh collection, saw ${r7d.body.serverChanges.length} docs`);
   ok('Org namespace isolated from Alice\'s personal namespace');
 
+  // ── Scenario 11: DocIndex — ownership tracking and share token ───────────
+
+  banner('Scenario 11: DocIndex — ownership tracking and share token');
+
+  // Sync a year-planner document as Alice so docIndex gets an entry
+  const t11 = HLC.tick(HLC.zero(), Date.now());
+
+  const r11sync = await syncPost(app, 'year-planner', {
+    collection:  'plans',
+    clientClock: HLC.zero(),
+    changes: [{
+      key:       'planner-2026',
+      doc:       { title: 'Year Plan 2026', goals: ['ship M007', 'learn Rust'] },
+      fieldRevs: { title: t11, goals: t11 },
+      baseClock: HLC.zero(),
+    }],
+  }, aliceToken);
+
+  assert(r11sync.status === 200, `Expected 200 from year-planner sync, got ${r11sync.status}`);
+  ok('Alice synced year-planner/planner-2026 (docIndex entry created)');
+
+  // GET /docIndex/year-planner/planner-2026 with aliceToken → 200
+  const r11get = await docIndexGet(app, 'year-planner', 'planner-2026', aliceToken);
+  assert(r11get.status === 200, `Expected 200 from docIndex GET, got ${r11get.status}`);
+
+  const entry = r11get.body;
+  assert(entry.visibility === 'private', `Expected visibility='private', got '${entry.visibility}'`);
+  assert(entry.userId === 'alice-uuid', `Expected userId='alice-uuid', got '${entry.userId}'`);
+  ok('GET /docIndex/year-planner/planner-2026 → 200 (visibility=private, userId=alice-uuid)');
+  console.log('  docIndex entry:', JSON.stringify(entry, null, 2));
+
+  // PATCH visibility → 'shared'
+  const r11patch = await app.request('/docIndex/year-planner/planner-2026', {
+    method:  'PATCH',
+    body:    JSON.stringify({ visibility: 'shared' }),
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${aliceToken}` },
+  });
+  assert(r11patch.status === 200, `Expected 200 from PATCH, got ${r11patch.status}`);
+  const patched = await r11patch.json();
+  assert(patched.visibility === 'shared', `Expected patched visibility='shared', got '${patched.visibility}'`);
+  ok('PATCH /docIndex/year-planner/planner-2026 → 200 (visibility updated to shared)');
+
+  // POST /docIndex/year-planner/planner-2026/shareToken → 200, shareToken is string
+  const r11mint = await app.request('/docIndex/year-planner/planner-2026/shareToken', {
+    method:  'POST',
+    headers: { Authorization: `Bearer ${aliceToken}` },
+  });
+  assert(r11mint.status === 200, `Expected 200 from mintToken, got ${r11mint.status}`);
+  const { shareToken } = await r11mint.json();
+  assert(typeof shareToken === 'string' && shareToken.length > 0, `Expected shareToken string, got ${shareToken}`);
+  ok(`POST /docIndex/year-planner/planner-2026/shareToken → 200 (shareToken minted: ${shareToken.slice(0, 8)}...)`);
+
+  // GET /docIndex/year-planner/planner-2026 with bobToken → 404 (entry keyed by owner userId, invisible to Bob)
+  const r11bob = await docIndexGet(app, 'year-planner', 'planner-2026', bobToken);
+  assert(r11bob.status === 404, `Expected 404 for Bob (entry not found under Bob's userId), got ${r11bob.status}`);
+  ok('GET /docIndex/year-planner/planner-2026 with bobToken → 404 (entry invisible — keyed by owner userId)');
+
+  // ── Scenario 12: HTTP org create — registerable flag and duplicate name ───
+
+  banner('Scenario 12: HTTP org create — registerable=true, duplicate name 409, disabled 403');
+
+  // Seed a fresh user so the org name 'scenario-12-org' doesn't collide with Scenario 7
+  await userRepo._users().store('carol-s12-uuid', {
+    userId:    'carol-s12-uuid',
+    email:     'carol-s12@example.com',
+    providers: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+
+  const carolS12Token = await JwtSession.sign({ sub: 'carol-s12-uuid', providers: ['demo'] }, JWT_SECRET);
+
+  // (a) POST /orgs with registerable=true → 201
+  const r12a = await orgPost(app, { name: 'scenario-12-org' }, carolS12Token);
+  assert(r12a.status === 201, `Expected 201 from POST /orgs, got ${r12a.status}: ${JSON.stringify(r12a.body)}`);
+  assert(r12a.body.role === 'org-admin', `Expected role='org-admin', got '${r12a.body.role}'`);
+  ok(`POST /orgs { name: 'scenario-12-org' } → 201 (orgId: ${r12a.body.orgId?.slice(0, 8)}..., role: ${r12a.body.role})`);
+
+  // (b) POST /orgs same name again → 409 DuplicateOrgNameError
+  const r12b = await orgPost(app, { name: 'scenario-12-org' }, carolS12Token);
+  assert(r12b.status === 409, `Expected 409 from duplicate POST /orgs, got ${r12b.status}: ${JSON.stringify(r12b.body)}`);
+  ok(`POST /orgs same name again → 409 (${r12b.body.error})`);
+
+  // (c) POST /orgs with registerable absent → 403
+  // Build a separate minimal app with no orgs.registerable in config
+  const { app: appNoReg, appCtx: appCtxNoReg } = await buildAppNoReg();
+
+  // Seed a user in the no-reg app store so the JWT sub resolves
+  const userRepoNoReg = appCtxNoReg.get('userRepository');
+  await userRepoNoReg._users().store('carol-s12-uuid', {
+    userId:    'carol-s12-uuid',
+    email:     'carol-s12@example.com',
+    providers: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+
+  const r12c = await orgPost(appNoReg, { name: 'any-org-name' }, carolS12Token);
+  assert(r12c.status === 403, `Expected 403 from POST /orgs (no-reg), got ${r12c.status}: ${JSON.stringify(r12c.body)}`);
+  ok(`POST /orgs (registerable absent) → 403 (${r12c.body.error})`);
+
+  // Tear down the no-reg app
+  await appCtxNoReg.stop?.();
+
   // ── Summary ───────────────────────────────────────────────────────────────
 
   banner('All scenarios passed');
@@ -405,7 +569,15 @@ async function main() {
   console.log('  ✓ Alice + Bob share documents via x-org-id header');
   console.log('  ✓ Carol (non-member) rejected with 403');
   console.log('  ✓ Org namespace isolated from personal namespace');
-  console.log('\n  Multi-app, multi-user, org-scoped sync working correctly.\n');
+  console.log('  ✓ DocIndex ownership entry created on sync write');
+  console.log('  ✓ DocIndex GET returns entry with correct userId and visibility');
+  console.log('  ✓ DocIndex PATCH updates visibility to shared');
+  console.log('  ✓ DocIndex mintToken returns UUID share token');
+  console.log('  ✓ DocIndex GET returns 404 for non-owner (entry invisible — keyed by owner userId)');
+  console.log('  ✓ HTTP POST /orgs (registerable=true) → 201 with role=org-admin');
+  console.log('  ✓ HTTP POST /orgs duplicate name → 409 DuplicateOrgNameError');
+  console.log('  ✓ HTTP POST /orgs (registerable absent) → 403');
+  console.log('\n  Multi-app, multi-user, org-scoped sync + docIndex ownership tracking + HTTP org creation working correctly.\n');
 }
 
 main().catch((err) => {

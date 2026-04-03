@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "appConfig",
+  "title": "AppConfig",
+  "description": "Application configuration block. Top-level keys are application names; values describe the application and its collections.",
+  "type": "object",
+  "additionalProperties": {
+    "type": "object",
+    "description": "Per-application configuration",
+    "properties": {
+      "description": {
+        "type": "string",
+        "description": "Human-readable description of the application"
+      },
+      "collections": {
+        "type": "object",
+        "description": "Map of collection name to collection configuration",
+        "additionalProperties": {
+          "type": "object",
+          "description": "Per-collection configuration",
+          "properties": {
+            "schema": {
+              "type": "object",
+              "description": "Inline JSON Schema for documents in this collection"
+            },
+            "schemaPath": {
+              "type": "string",
+              "description": "Filesystem path to a JSON Schema file for documents in this collection"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "additionalProperties": false
+  }
+}

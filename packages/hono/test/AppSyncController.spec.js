@@ -11,7 +11,7 @@ import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
 import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
-import { SyncRepository, SyncService, ApplicationRegistry, SchemaValidator } from '@alt-javascript/data-api-server';
+import { SyncRepository, SyncService, ApplicationRegistry, SchemaValidator, DocumentIndexRepository } from '@alt-javascript/data-api-server';
 import { AuthMiddlewareRegistrar } from '@alt-javascript/data-api-auth-hono';
 import {
   OrgRepository, OrgService, UserRepository,
@@ -561,4 +561,160 @@ describe('AppSyncController (CDI integration)', () => {
 
   });
 
+});
+
+// ── DocumentIndexRepository wiring ────────────────────────────────────────────
+//
+// A separate context that adds DocumentIndexRepository to the CDI registration
+// so we can assert that upsertOwnership fires on sync writes.
+//
+// The existing suite above remains completely unmodified — it proves backward
+// compatibility (AppSyncController works fine when documentIndexRepository is
+// NOT wired because of the null-guard).
+
+async function buildContextWithDocIndex() {
+  const config = new EphemeralConfig(BASE_CONFIG);
+
+  const context = new Context([
+    ...honoStarter(),
+    ...jsnosqlcAutoConfiguration(),
+    { Reference: SyncRepository,      name: 'syncRepository',      scope: 'singleton' },
+    { Reference: SyncService,         name: 'syncService',         scope: 'singleton' },
+    { Reference: ApplicationRegistry, name: 'applicationRegistry', scope: 'singleton',
+      properties: [{ name: 'applications', path: 'applications' }] },
+    { Reference: SchemaValidator,     name: 'schemaValidator',     scope: 'singleton',
+      properties: [{ name: 'applications', path: 'applications' }] },
+    { Reference: UserRepository,      name: 'userRepository',      scope: 'singleton' },
+    { Reference: OrgRepository,       name: 'orgRepository',       scope: 'singleton' },
+    { Reference: OrgService,          name: 'orgService',          scope: 'singleton' },
+    // Auth middleware MUST come before AppSyncController
+    { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
+      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
+    // DocumentIndexRepository registered BEFORE AppSyncController so CDI can autowire it
+    { Reference: DocumentIndexRepository, name: 'documentIndexRepository', scope: 'singleton' },
+    { Reference: AppSyncController,   name: 'appSyncController',   scope: 'singleton' },
+  ]);
+
+  const appCtx = new ApplicationContext({ contexts: [context], config });
+  await appCtx.start({ run: false });
+  await appCtx.get('nosqlClient').ready();
+
+  return appCtx;
+}
+
+describe('AppSyncController — DocumentIndexRepository upsert on sync write', () => {
+  let appCtx;
+  let app;
+  let docIndexRepo;
+
+  beforeEach(async () => {
+    appCtx      = await buildContextWithDocIndex();
+    app         = appCtx.get('honoAdapter').app;
+    docIndexRepo = appCtx.get('documentIndexRepository');
+  });
+
+  it('documentIndexRepository is autowired into appSyncController', () => {
+    const ctrl = appCtx.get('appSyncController');
+    assert.instanceOf(ctrl.documentIndexRepository, DocumentIndexRepository);
+  });
+
+  it('docIndex entry is created with visibility=private after a sync write', async () => {
+    const token = await makeToken('owner-1');
+    const t1    = HLC.tick(HLC.zero(), Date.now());
+
+    const res = await syncPost(app, 'shopping-list', {
+      collection:  'items',
+      clientClock: HLC.zero(),
+      changes: [{
+        key:       'doc-abc',
+        doc:       { name: 'My item' },
+        fieldRevs: { name: t1 },
+        baseClock: HLC.zero(),
+      }],
+    }, token);
+
+    assert.equal(res.status, 200, 'sync should succeed');
+
+    const entry = await docIndexRepo.get('owner-1', 'shopping-list', 'doc-abc');
+    assert.isNotNull(entry, 'docIndex entry must exist after sync write');
+    assert.equal(entry.userId,     'owner-1');
+    assert.equal(entry.app,        'shopping-list');
+    assert.equal(entry.docKey,     'doc-abc');
+    assert.equal(entry.collection, 'items');
+    assert.equal(entry.visibility, 'private');
+    assert.deepEqual(entry.sharedWith, []);
+    assert.isNull(entry.shareToken);
+  });
+
+  it('visibility is preserved (not reset to private) on a second sync write for the same docKey', async () => {
+    const token = await makeToken('owner-2');
+    const t1    = HLC.tick(HLC.zero(), Date.now());
+
+    // First write — entry created with visibility=private
+    await syncPost(app, 'shopping-list', {
+      collection:  'items',
+      clientClock: HLC.zero(),
+      changes: [{
+        key:       'doc-preserve',
+        doc:       { name: 'First version' },
+        fieldRevs: { name: t1 },
+        baseClock: HLC.zero(),
+      }],
+    }, token);
+
+    // Manually promote visibility to 'shared'
+    await docIndexRepo.setVisibility('owner-2', 'shopping-list', 'doc-preserve', 'shared');
+
+    // Second write (update) — upsert must NOT reset visibility
+    const t2 = HLC.tick(t1, Date.now());
+    await syncPost(app, 'shopping-list', {
+      collection:  'items',
+      clientClock: HLC.zero(),
+      changes: [{
+        key:       'doc-preserve',
+        doc:       { name: 'Updated version' },
+        fieldRevs: { name: t2 },
+        baseClock: HLC.zero(),
+      }],
+    }, token);
+
+    const entry = await docIndexRepo.get('owner-2', 'shopping-list', 'doc-preserve');
+    assert.isNotNull(entry);
+    assert.equal(entry.visibility, 'shared', 'visibility must not be reset to private on re-sync');
+  });
+
+  it('no docIndex entry is created when changes array is empty', async () => {
+    const token = await makeToken('owner-3');
+
+    await syncPost(app, 'shopping-list', {
+      collection:  'items',
+      clientClock: HLC.zero(),
+      changes:     [],
+    }, token);
+
+    // We cannot check a specific key because nothing was written — confirm count by
+    // calling listByUser; it must return empty.
+    const entries = await docIndexRepo.listByUser('owner-3', 'shopping-list');
+    assert.isEmpty(entries, 'no docIndex entries when no changes are submitted');
+  });
+
+  it('multiple changes in one sync call each get a docIndex entry', async () => {
+    const token = await makeToken('owner-4');
+    const t1    = HLC.tick(HLC.zero(), Date.now());
+
+    await syncPost(app, 'shopping-list', {
+      collection:  'items',
+      clientClock: HLC.zero(),
+      changes: [
+        { key: 'multi-1', doc: { name: 'A' }, fieldRevs: { name: t1 }, baseClock: HLC.zero() },
+        { key: 'multi-2', doc: { name: 'B' }, fieldRevs: { name: t1 }, baseClock: HLC.zero() },
+        { key: 'multi-3', doc: { name: 'C' }, fieldRevs: { name: t1 }, baseClock: HLC.zero() },
+      ],
+    }, token);
+
+    const entries = await docIndexRepo.listByUser('owner-4', 'shopping-list');
+    assert.lengthOf(entries, 3, 'each change must produce a docIndex entry');
+    const keys = entries.map((e) => e.docKey).sort();
+    assert.deepEqual(keys, ['multi-1', 'multi-2', 'multi-3']);
+  });
 });

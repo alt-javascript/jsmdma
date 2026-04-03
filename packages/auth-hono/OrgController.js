@@ -30,6 +30,7 @@ import {
   LastAdminError,
   AlreadyMemberError,
   NotMemberError,
+  DuplicateOrgNameError,
 } from '@alt-javascript/data-api-auth-server';
 
 export default class OrgController {
@@ -45,8 +46,9 @@ export default class OrgController {
   ];
 
   constructor() {
-    this.orgService = null; // CDI autowired
-    this.logger     = null; // CDI autowired
+    this.orgService   = null; // CDI autowired
+    this.logger       = null; // CDI autowired
+    this.registerable = null; // CDI property-injected from config: orgs.registerable
   }
 
   // ── helpers ───────────────────────────────────────────────────────────────
@@ -61,6 +63,7 @@ export default class OrgController {
     if (err instanceof NotMemberError)     return { statusCode: 403, body: { error: err.message } };
     if (err instanceof LastAdminError)     return { statusCode: 409, body: { error: err.message } };
     if (err instanceof AlreadyMemberError) return { statusCode: 409, body: { error: err.message } };
+    if (err instanceof DuplicateOrgNameError) return { statusCode: 409, body: { error: err.message } };
     this.logger?.error?.(`[OrgController] unexpected error: ${err.message}`);
     return { statusCode: 500, body: { error: 'Internal server error' } };
   }
@@ -74,6 +77,10 @@ export default class OrgController {
   async createOrg(request) {
     const user = this._getUser(request);
     if (!user) return { statusCode: 401, body: { error: 'Authentication required' } };
+
+    if (this.registerable !== true) {
+      return { statusCode: 403, body: { error: 'Organisation registration is disabled on this instance.' } };
+    }
 
     const { name } = request.body ?? {};
     if (!name || typeof name !== 'string') {

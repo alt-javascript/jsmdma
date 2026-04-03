@@ -12,4 +12,5 @@ export {
   LastAdminError,
   AlreadyMemberError,
   NotMemberError,
+  DuplicateOrgNameError,
 } from './orgErrors.js';

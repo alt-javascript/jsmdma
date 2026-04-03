@@ -13,6 +13,7 @@ import {
   LastAdminError,
   AlreadyMemberError,
   NotMemberError,
+  DuplicateOrgNameError,
 } from '../orgErrors.js';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -60,6 +61,36 @@ describe('OrgService', () => {
     assert.equal(membership.userId, 'alice');
     assert.equal(membership.orgId,  org.orgId);
     assert.equal(membership.role,   'org-admin');
+  });
+
+  it('createOrg: throws DuplicateOrgNameError when the same name is used twice', async () => {
+    const { svc, userRepo } = await buildService();
+    await seedUser(userRepo, 'alice');
+    await seedUser(userRepo, 'bob');
+
+    await svc.createOrg('alice', 'Acme Corp');
+    await throwsTyped(() => svc.createOrg('bob', 'Acme Corp'), DuplicateOrgNameError);
+  });
+
+  it('createOrg: two different names succeed independently', async () => {
+    const { svc, userRepo } = await buildService();
+    await seedUser(userRepo, 'alice');
+    await seedUser(userRepo, 'bob');
+
+    const { org: o1 } = await svc.createOrg('alice', 'Alpha Corp');
+    const { org: o2 } = await svc.createOrg('bob',   'Beta Corp');
+
+    assert.notEqual(o1.orgId, o2.orgId);
+    assert.equal(o1.name, 'Alpha Corp');
+    assert.equal(o2.name, 'Beta Corp');
+  });
+
+  it('createOrg: name is reserved in orgNames after creation', async () => {
+    const { svc, userRepo, orgRepo } = await buildService();
+    await seedUser(userRepo, 'alice');
+
+    await svc.createOrg('alice', 'Acme Corp');
+    assert.isTrue(await orgRepo.nameExists('Acme Corp'));
   });
 
   // ── addMember ─────────────────────────────────────────────────────────────

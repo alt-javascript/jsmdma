@@ -25,6 +25,9 @@ import { Filter } from '@alt-javascript/jsnosqlc-core';
 
 const ORGS_COL    = 'orgs';
 const MEMBERS_COL = 'orgMembers';
+const ORG_NAMES_COL = 'orgNames';
+
+const encode = (s) => String(s).replace(/:/g, '%3A');
 
 export default class OrgRepository {
   /**
@@ -38,6 +41,7 @@ export default class OrgRepository {
 
   _orgs()    { return this.nosqlClient.getCollection(ORGS_COL);    }
   _members() { return this.nosqlClient.getCollection(MEMBERS_COL); }
+  _orgNames() { return this.nosqlClient.getCollection(ORG_NAMES_COL); }
 
   _memberKey(orgId, userId) { return `${orgId}:${userId}`; }
 
@@ -149,5 +153,36 @@ export default class OrgRepository {
     const filter = Filter.where('orgId').eq(orgId).build();
     const cursor = await this._members().find(filter);
     return cursor.getDocuments();
+  }
+
+  // ── orgNames index ────────────────────────────────────────────────────────
+
+  /**
+   * Reserve an org name, associating it with an orgId.
+   * @param {string} name
+   * @param {string} orgId
+   * @returns {Promise<void>}
+   */
+  async reserveName(name, orgId) {
+    await this._orgNames().store(encode(name), { orgId });
+    this.logger?.info?.(`[OrgRepository] reserveName name="${name}" orgId=${orgId}`);
+  }
+
+  /**
+   * Check whether an org name is already reserved.
+   * @param {string} name
+   * @returns {Promise<boolean>}
+   */
+  async nameExists(name) {
+    return (await this._orgNames().get(encode(name))) != null;
+  }
+
+  /**
+   * Release a previously reserved org name.
+   * @param {string} name
+   * @returns {Promise<void>}
+   */
+  async releaseName(name) {
+    await this._orgNames().delete(encode(name));
   }
 }

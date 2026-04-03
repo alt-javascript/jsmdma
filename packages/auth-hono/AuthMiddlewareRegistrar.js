@@ -13,6 +13,7 @@
  *   /:application/sync  — POST sync endpoint (M003)
  *   /orgs               — POST create org, GET list orgs (M004)
  *   /orgs/*             — all org member management routes (M004)
+ *   /docIndex/*         — all DocIndexController routes (M007)
  *
  * CDI autowires:
  *   this.jwtSecret — JWT secret string
@@ -41,6 +42,7 @@ export default class AuthMiddlewareRegistrar {
     app.use('/:application/sync', mw);
     app.use('/orgs',              mw);
     app.use('/orgs/*',            mw);
-    this.logger?.debug?.('[AuthMiddlewareRegistrar] JWT middleware applied to /auth/me, /auth/link/*, /auth/providers/*, /:application/sync, /orgs, /orgs/*');
+    app.use('/docIndex/*',        mw);
+    this.logger?.debug?.('[AuthMiddlewareRegistrar] JWT middleware applied to /auth/me, /auth/link/*, /auth/providers/*, /:application/sync, /orgs, /orgs/*, /docIndex/*');
   }
 }

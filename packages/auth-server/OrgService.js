@@ -20,6 +20,7 @@ import {
   LastAdminError,
   AlreadyMemberError,
   NotMemberError,
+  DuplicateOrgNameError,
 } from './orgErrors.js';
 
 export default class OrgService {
@@ -64,9 +65,11 @@ export default class OrgService {
    * @returns {Promise<{ org: Object, membership: Object }>}
    */
   async createOrg(callerUserId, name) {
+    if (await this.orgRepository.nameExists(name)) throw new DuplicateOrgNameError(name);
     const orgId = randomUUID();
     const org   = await this.orgRepository.createOrg(orgId, name, callerUserId);
     const membership = await this.orgRepository.createMember(orgId, callerUserId, 'org-admin');
+    await this.orgRepository.reserveName(name, orgId);
     this.logger?.info?.(`[OrgService] createOrg orgId=${orgId} name="${name}" creator=${callerUserId}`);
     return { org, membership };
   }

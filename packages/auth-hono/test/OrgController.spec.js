@@ -28,6 +28,7 @@ const BASE_CONFIG = {
   logging: { level: { ROOT: 'error' } },
   server:  { port: 0 },
   auth:    { jwt: { secret: JWT_SECRET } },
+  orgs:    { registerable: true },
 };
 
 // ── CDI context ───────────────────────────────────────────────────────────────
@@ -46,7 +47,8 @@ async function buildContext() {
     // Middleware MUST come before controllers
     { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
       properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
-    { Reference: OrgController,   name: 'orgController',   scope: 'singleton' },
+    { Reference: OrgController,   name: 'orgController',   scope: 'singleton',
+      properties: [{ name: 'registerable', path: 'orgs.registerable' }] },
   ]);
 
   const appCtx = new ApplicationContext({ contexts: [context], config });
@@ -56,7 +58,30 @@ async function buildContext() {
   return appCtx;
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+async function buildContextNoRegistration() {
+  // Omit the orgs key entirely so registerable stays null (not injected)
+  const { orgs: _omit, ...configWithoutOrgs } = BASE_CONFIG;
+  const config = new EphemeralConfig(configWithoutOrgs);
+
+  const context = new Context([
+    ...honoStarter(),
+    ...jsnosqlcAutoConfiguration(),
+    { Reference: UserRepository,  name: 'userRepository',  scope: 'singleton' },
+    { Reference: AuthService,     name: 'authService',     scope: 'singleton',
+      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
+    { Reference: OrgRepository,   name: 'orgRepository',   scope: 'singleton' },
+    { Reference: OrgService,      name: 'orgService',      scope: 'singleton' },
+    { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
+      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
+    { Reference: OrgController,   name: 'orgController',   scope: 'singleton' },
+  ]);
+
+  const appCtx = new ApplicationContext({ contexts: [context], config });
+  await appCtx.start({ run: false });
+  await appCtx.get('nosqlClient').ready();
+
+  return appCtx;
+}
 
 async function makeToken(userId) {
   return JwtSession.sign({ sub: userId, providers: ['test'], email: `${userId}@test.com` }, JWT_SECRET);
@@ -144,6 +169,36 @@ describe('OrgController (CDI integration)', () => {
       const token = await makeToken('alice');
       const res   = await post(app, '/orgs', {}, token);
       assert.equal(res.status, 400);
+    });
+
+    it('returns 403 when orgs.registerable is absent', async () => {
+      const noRegCtx = await buildContextNoRegistration();
+      const noRegApp = noRegCtx.get('honoAdapter').app;
+      await (async () => {
+        const repo = noRegCtx.get('userRepository');
+        await repo._users().store('alice', {
+          userId: 'alice', email: 'alice@test.com', providers: [],
+          createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        });
+      })();
+      const token = await makeToken('alice');
+      const res   = await post(noRegApp, '/orgs', { name: 'Acme' }, token);
+      assert.equal(res.status, 403);
+    });
+
+    it('returns 409 when org name is already taken', async () => {
+      await seedUser(appCtx, 'alice');
+      await seedUser(appCtx, 'bob');
+      const aliceToken = await makeToken('alice');
+      const bobToken   = await makeToken('bob');
+
+      // alice creates 'Acme'
+      const first = await post(app, '/orgs', { name: 'Acme' }, aliceToken);
+      assert.equal(first.status, 201);
+
+      // bob tries to create another org with the same name
+      const second = await post(app, '/orgs', { name: 'Acme' }, bobToken);
+      assert.equal(second.status, 409);
     });
   });
 

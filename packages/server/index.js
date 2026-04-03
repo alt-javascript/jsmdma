@@ -7,3 +7,4 @@ export { default as SyncService } from './SyncService.js';
 export { default as ApplicationRegistry } from './ApplicationRegistry.js';
 export { default as SchemaValidator } from './SchemaValidator.js';
 export { namespaceKey } from './namespaceKey.js';
+export { default as DocumentIndexRepository } from './DocumentIndexRepository.js';

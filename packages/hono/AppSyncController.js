@@ -22,11 +22,12 @@
  *     Requires live isMember check via OrgService; 403 on non-member.
  *
  * CDI autowiring (by name):
- *   this.syncService          — SyncService instance
- *   this.applicationRegistry  — ApplicationRegistry instance
- *   this.schemaValidator      — SchemaValidator instance
- *   this.orgService           — OrgService instance (optional; 500 if header present but not wired)
- *   this.logger               — optional logger
+ *   this.syncService               — SyncService instance
+ *   this.applicationRegistry       — ApplicationRegistry instance
+ *   this.schemaValidator           — SchemaValidator instance
+ *   this.orgService                — OrgService instance (optional; 500 if header present but not wired)
+ *   this.documentIndexRepository   — DocumentIndexRepository instance (optional; skip upsert if not wired)
+ *   this.logger                    — optional logger
  */
 import { namespaceKey } from '@alt-javascript/data-api-server';
 
@@ -37,11 +38,12 @@ export default class AppSyncController {
   ];
 
   constructor() {
-    this.syncService         = null; // CDI autowired
-    this.applicationRegistry = null; // CDI autowired
-    this.schemaValidator     = null; // CDI autowired
-    this.orgService          = null; // CDI autowired (required for org-scoped sync)
-    this.logger              = null; // CDI autowired
+    this.syncService              = null; // CDI autowired
+    this.applicationRegistry      = null; // CDI autowired
+    this.schemaValidator          = null; // CDI autowired
+    this.orgService               = null; // CDI autowired (required for org-scoped sync)
+    this.documentIndexRepository  = null; // CDI autowired (optional — skip upsert if not wired)
+    this.logger                   = null; // CDI autowired
   }
 
   /**
@@ -133,6 +135,20 @@ export default class AppSyncController {
     // Pass the pre-computed storageCollection as 'collection'; omit userId/application
     // so SyncService uses the provided key as-is (fallback path when userId is undefined).
     const result = await this.syncService.sync(storageCollection, clientClock, changes);
+
+    // ── Document ownership index ───────────────────────────────────────────────
+    // Upsert a docIndex entry for every incoming write so ownership is tracked from
+    // the first sync.  Null-guarded: if documentIndexRepository is not wired (e.g.
+    // in test contexts that don't need it), this block is silently skipped.
+    if (this.documentIndexRepository && Array.isArray(changes) && changes.length > 0) {
+      for (const change of changes) {
+        await this.documentIndexRepository.upsertOwnership(userId, application, change.key, collection);
+        this.logger?.info?.(
+          `[AppSyncController] docIndex upsert userId=${userId} app=${application} key=${change.key} collection=${collection}`,
+        );
+      }
+    }
+
     return result;
   }
 }

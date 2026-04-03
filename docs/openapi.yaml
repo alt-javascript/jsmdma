@@ -1,0 +1,1219 @@
+openapi: 3.1.0
+
+info:
+  title: data-api
+  version: 1.0.0
+  description: |
+    Offline-first, bidirectional data sync API built on the alt-javascript/boot ecosystem.
+    Clients maintain local data copies and sync with the server using field-level merge and
+    HLC-based causal conflict resolution. Supports multiple configured applications,
+    per-user isolated storage, organisation tenancy (X-Org-Id), JSON Schema validation,
+    and text auto-merge for non-overlapping line-level changes.
+
+servers:
+  - url: /
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: sync
+    description: Document synchronisation and health
+  - name: auth
+    description: Authentication and identity management
+  - name: orgs
+    description: Organisation management
+  - name: docIndex
+    description: Document ownership and sharing index
+
+paths:
+  /health:
+    get:
+      summary: Liveness check
+      description: Returns server status. No authentication required.
+      operationId: getHealth
+      tags: [sync]
+      security: []
+      responses:
+        '200':
+          description: Server is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                required: [status]
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /{application}/sync:
+    post:
+      summary: Sync documents for an application
+      description: |
+        Push client changes and pull server changes for the given application.
+        The `application` path parameter must match a name configured in the server's
+        ApplicationRegistry — unknown application names return 404.
+
+        Storage is namespaced per user (`{userId}:{application}:{collection}`) or per
+        organisation (`org:{orgId}:{application}:{collection}` when `X-Org-Id` header
+        is present). Org-scoped sync requires the caller to be a member of the org.
+
+        On first sync, send `clientClock: "0000000000000-000000-"` and `changes: []`
+        to receive the full server state.
+      operationId: sync
+      tags: [sync]
+      parameters:
+        - name: application
+          in: path
+          required: true
+          description: |
+            Application name. Must match a name registered in the server's
+            ApplicationRegistry configuration. Unknown names → 404.
+          schema:
+            type: string
+            example: year-planner
+        - name: X-Org-Id
+          in: header
+          required: false
+          description: |
+            Optional organisation ID for org-scoped storage. When present, documents
+            are stored under `org:{orgId}:{application}:{collection}` and the caller
+            must be a member of that organisation.
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncRequest'
+      responses:
+        '200':
+          description: Sync successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncResponse'
+        '400':
+          description: Missing or invalid request body fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Not a member of the specified organisation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Unknown application name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/me:
+    get:
+      summary: Get current user identity
+      description: Returns the authenticated user's identity decoded from the JWT.
+      operationId: getMe
+      tags: [auth]
+      responses:
+        '200':
+          description: Current user identity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserIdentity'
+        '401':
+          description: Unauthorized — no valid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/logout:
+    post:
+      summary: Logout guidance
+      description: |
+        Returns stateless logout guidance. JWTs are stateless — there is no
+        server-side session to invalidate. The client should delete its stored token.
+      operationId: logout
+      tags: [auth]
+      security: []
+      responses:
+        '200':
+          description: Logout guidance message
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                required: [message]
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/{provider}:
+    get:
+      summary: Initiate OAuth flow
+      description: |
+        Begins an OAuth authorization code flow for the given provider.
+        Returns the authorization URL, state parameter, and PKCE code verifier.
+        The client should redirect the user to `authorizationURL`, then call
+        `GET /auth/{provider}/callback` with the returned `code`, `state`, and
+        the stored `state` and `code_verifier`.
+      operationId: beginAuth
+      tags: [auth]
+      security: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          description: OAuth provider name (e.g. github, google)
+          schema:
+            type: string
+            example: github
+        - name: state
+          in: query
+          required: false
+          description: Optional client-provided state parameter
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Authorization URL and PKCE parameters
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  authorizationURL:
+                    type: string
+                    format: uri
+                    description: URL to redirect the user to for authorization
+                  state:
+                    type: string
+                    description: State parameter to pass back in the callback
+                  codeVerifier:
+                    type: string
+                    description: PKCE code verifier to store and pass back in the callback
+                required: [authorizationURL, state, codeVerifier]
+        '400':
+          description: Unknown provider
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/{provider}/callback:
+    get:
+      summary: Complete OAuth flow
+      description: |
+        Completes the OAuth authorization code flow. All parameters are passed as
+        query parameters (not request body). Returns a JWT token on success.
+      operationId: completeAuth
+      tags: [auth]
+      security: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          description: OAuth provider name (e.g. github, google)
+          schema:
+            type: string
+            example: github
+        - name: code
+          in: query
+          required: true
+          description: Authorization code returned by the OAuth provider
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          description: State parameter returned by the OAuth provider
+          schema:
+            type: string
+        - name: stored_state
+          in: query
+          required: true
+          description: State value originally generated by the server (from beginAuth)
+          schema:
+            type: string
+        - name: code_verifier
+          in: query
+          required: false
+          description: PKCE code verifier (required for PKCE flows)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Authentication successful — returns user and JWT token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/UserIdentity'
+                  token:
+                    type: string
+                    description: JWT bearer token
+                required: [user, token]
+        '400':
+          description: Missing query params or state mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Provider error or authentication failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/link/{provider}:
+    post:
+      summary: Link an additional OAuth provider
+      description: |
+        Links an additional OAuth provider to the authenticated user's identity.
+        All OAuth callback parameters are passed as query parameters (not request body).
+        Returns 409 if the provider account is already linked to another user.
+      operationId: linkProvider
+      tags: [auth]
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          description: OAuth provider name (e.g. github, google)
+          schema:
+            type: string
+            example: github
+        - name: code
+          in: query
+          required: true
+          description: Authorization code returned by the OAuth provider
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          description: State parameter returned by the OAuth provider
+          schema:
+            type: string
+        - name: stored_state
+          in: query
+          required: true
+          description: State value originally generated by the server
+          schema:
+            type: string
+        - name: code_verifier
+          in: query
+          required: false
+          description: PKCE code verifier
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Provider linked successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/UserIdentity'
+                required: [user]
+        '400':
+          description: Missing query params, state mismatch, or unknown provider
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Provider account already linked to another user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Provider error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/providers/{provider}:
+    delete:
+      summary: Unlink an OAuth provider
+      description: |
+        Removes an OAuth provider from the authenticated user's identity.
+        Returns 409 if this is the user's only remaining provider (unlinking would
+        lock the user out of their account).
+      operationId: unlinkProvider
+      tags: [auth]
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          description: OAuth provider name to remove (e.g. github, google)
+          schema:
+            type: string
+            example: github
+      responses:
+        '200':
+          description: Provider unlinked — returns updated providers list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        provider:
+                          type: string
+                        providerUserId:
+                          type: string
+                      required: [provider, providerUserId]
+                required: [providers]
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Cannot remove last provider
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /orgs:
+    post:
+      summary: Create an organisation
+      description: |
+        Creates a new organisation. The caller becomes the first `org-admin`.
+        Returns 403 if organisation registration is disabled on this instance
+        (`orgs.registerable` not set to `true` in the server configuration).
+        Returns 409 if an organisation with the same name already exists.
+      operationId: createOrg
+      tags: [orgs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: Human-readable organisation name (must be unique)
+              required: [name]
+      responses:
+        '201':
+          description: Organisation created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orgId:
+                    type: string
+                    format: uuid
+                  name:
+                    type: string
+                  role:
+                    type: string
+                    enum: [org-admin]
+                required: [orgId, name, role]
+        '400':
+          description: Missing required field name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Organisation registration is disabled on this instance.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Organisation with this name already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      summary: List caller's organisations
+      description: Returns all organisations the authenticated user belongs to.
+      operationId: listOrgs
+      tags: [orgs]
+      responses:
+        '200':
+          description: List of organisations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orgs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MemberRecord'
+                required: [orgs]
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /orgs/{orgId}/members:
+    get:
+      summary: List organisation members
+      description: Returns all members of the organisation. Requires caller to be a member.
+      operationId: listMembers
+      tags: [orgs]
+      parameters:
+        - name: orgId
+          in: path
+          required: true
+          description: Organisation UUID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: List of members
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  members:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MemberRecord'
+                required: [members]
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Caller is not a member of the organisation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Organisation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    post:
+      summary: Add a member to an organisation
+      description: Adds a user to the organisation. Requires org-admin role.
+      operationId: addMember
+      tags: [orgs]
+      parameters:
+        - name: orgId
+          in: path
+          required: true
+          description: Organisation UUID
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                userId:
+                  type: string
+                  format: uuid
+                  description: UUID of the user to add
+                role:
+                  type: string
+                  enum: [org-admin, member]
+                  default: member
+                  description: Role to assign (defaults to member)
+              required: [userId]
+      responses:
+        '200':
+          description: Member added
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  member:
+                    $ref: '#/components/schemas/MemberRecord'
+                required: [member]
+        '400':
+          description: Missing or invalid fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Caller is not an org-admin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Organisation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: User is already a member
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /orgs/{orgId}/members/{userId}:
+    patch:
+      summary: Change a member's role
+      description: Updates the role of an existing member. Requires org-admin role.
+      operationId: setMemberRole
+      tags: [orgs]
+      parameters:
+        - name: orgId
+          in: path
+          required: true
+          description: Organisation UUID
+          schema:
+            type: string
+            format: uuid
+        - name: userId
+          in: path
+          required: true
+          description: UUID of the member to update
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role:
+                  type: string
+                  enum: [org-admin, member]
+              required: [role]
+      responses:
+        '200':
+          description: Role updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  member:
+                    $ref: '#/components/schemas/MemberRecord'
+                required: [member]
+        '400':
+          description: Missing or invalid role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Caller is not an org-admin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Organisation or member not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Cannot demote last admin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      summary: Remove a member from an organisation
+      description: |
+        Removes a member from the organisation. Requires org-admin role.
+        Returns 409 if the member being removed is the last org-admin.
+      operationId: removeMember
+      tags: [orgs]
+      parameters:
+        - name: orgId
+          in: path
+          required: true
+          description: Organisation UUID
+          schema:
+            type: string
+            format: uuid
+        - name: userId
+          in: path
+          required: true
+          description: UUID of the member to remove
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Member removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  removed:
+                    type: boolean
+                    enum: [true]
+                required: [removed]
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Caller is not an org-admin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Organisation or member not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Cannot remove last admin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /docIndex/{app}/{docKey}:
+    get:
+      summary: Get document index entry
+      description: |
+        Returns the document ownership and visibility index entry for the
+        authenticated owner. Non-owners receive 404 (not 403) because the
+        compound storage key includes the owner's userId — no entry exists
+        for a different user.
+      operationId: getDocIndexEntry
+      tags: [docIndex]
+      parameters:
+        - name: app
+          in: path
+          required: true
+          description: Application name
+          schema:
+            type: string
+            example: year-planner
+        - name: docKey
+          in: path
+          required: true
+          description: Document key within the application
+          schema:
+            type: string
+            example: planner-2026
+      responses:
+        '200':
+          description: Document index entry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocIndexEntry'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Entry not found (or caller is not the owner)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    patch:
+      summary: Update document visibility or sharing
+      description: |
+        Updates the visibility and/or sharedWith list of a docIndex entry.
+        Owner only.
+
+        **sharedWith is additive** — each entry in the `sharedWith` array is
+        appended to the existing list via `addSharedWith`. This is not a
+        replace operation. To grant access to two users, send two PATCH
+        requests or include both entries in one request.
+
+        `visibility` enum values: `private`, `shared`, `org`, `public`.
+      operationId: patchDocIndexEntry
+      tags: [docIndex]
+      parameters:
+        - name: app
+          in: path
+          required: true
+          description: Application name
+          schema:
+            type: string
+            example: year-planner
+        - name: docKey
+          in: path
+          required: true
+          description: Document key within the application
+          schema:
+            type: string
+            example: planner-2026
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                visibility:
+                  type: string
+                  enum: [private, shared, org, public]
+                  description: New visibility level for the document
+                sharedWith:
+                  type: array
+                  description: |
+                    Entries to add to the shared-with list (additive — does not replace
+                    the existing list). Each entry grants access to one user in one app.
+                  items:
+                    $ref: '#/components/schemas/SharedWithEntry'
+      responses:
+        '200':
+          description: Updated document index entry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocIndexEntry'
+        '400':
+          description: Invalid visibility value or malformed sharedWith array
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Entry not found (or caller is not the owner)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /docIndex/{app}/{docKey}/shareToken:
+    post:
+      summary: Mint a share token
+      description: |
+        Generates a UUID share token for the document and stores it in the
+        docIndex entry. Owner only. Use the token to grant public access.
+      operationId: mintShareToken
+      tags: [docIndex]
+      parameters:
+        - name: app
+          in: path
+          required: true
+          description: Application name
+          schema:
+            type: string
+            example: year-planner
+        - name: docKey
+          in: path
+          required: true
+          description: Document key within the application
+          schema:
+            type: string
+            example: planner-2026
+      responses:
+        '200':
+          description: Share token minted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  shareToken:
+                    type: string
+                    format: uuid
+                    description: The newly minted share token
+                required: [shareToken]
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Entry not found (or caller is not the owner)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      summary: Revoke the share token
+      description: |
+        Revokes the share token by setting it to null. Owner only.
+        Returns `{ shareToken: null }` on success.
+      operationId: revokeShareToken
+      tags: [docIndex]
+      parameters:
+        - name: app
+          in: path
+          required: true
+          description: Application name
+          schema:
+            type: string
+            example: year-planner
+        - name: docKey
+          in: path
+          required: true
+          description: Document key within the application
+          schema:
+            type: string
+            example: planner-2026
+      responses:
+        '200':
+          description: Share token revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  shareToken:
+                    type: ['string', 'null']
+                    description: Always null after revocation
+                    example: null
+                required: [shareToken]
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Entry not found (or caller is not the owner)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    ErrorResponse:
+      type: object
+      description: Standard error response body
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+      required: [error]
+
+    UserIdentity:
+      type: object
+      description: Authenticated user identity decoded from the JWT
+      properties:
+        userId:
+          type: string
+          format: uuid
+          description: User UUID (JWT `sub` claim)
+        email:
+          type: ['string', 'null']
+          description: User email address; null if not available
+        providers:
+          type: array
+          description: Linked OAuth providers
+          items:
+            type: object
+            properties:
+              provider:
+                type: string
+                description: Provider name (e.g. github, google)
+              providerUserId:
+                type: string
+                description: User identifier within the provider
+            required: [provider, providerUserId]
+      required: [userId, providers]
+
+    MemberRecord:
+      type: object
+      description: An org membership record
+      properties:
+        orgId:
+          type: string
+          format: uuid
+          description: UUID of the organisation
+        userId:
+          type: string
+          format: uuid
+          description: UUID of the member
+        role:
+          type: string
+          enum: [org-admin, member]
+          description: The member's role within the organisation
+        joinedAt:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp of when the user joined
+      required: [orgId, userId, role, joinedAt]
+
+    SharedWithEntry:
+      type: object
+      description: A single entry in the sharedWith list — grants one user access in one app
+      properties:
+        userId:
+          type: string
+          format: uuid
+          description: UUID of the user who has access
+        app:
+          type: string
+          description: Application namespace the share is scoped to
+      required: [userId, app]
+
+    DocIndexEntry:
+      type: object
+      description: Document ownership and visibility index record
+      properties:
+        docKey:
+          type: string
+          description: Application-defined document key
+        userId:
+          type: string
+          format: uuid
+          description: UUID of the document owner
+        app:
+          type: string
+          description: Application name that owns the document
+        collection:
+          type: string
+          description: Collection name within the application
+        visibility:
+          type: string
+          enum: [private, shared, org, public]
+          description: Access visibility level for the document
+        sharedWith:
+          type: array
+          description: Explicit per-user, per-app share list (used when visibility is 'shared')
+          items:
+            $ref: '#/components/schemas/SharedWithEntry'
+        shareToken:
+          type: ['string', 'null']
+          description: UUID share token for public access; null when not enabled
+        createdAt:
+          type: string
+          format: date-time
+          description: ISO 8601 creation timestamp
+        updatedAt:
+          type: string
+          format: date-time
+          description: ISO 8601 last-updated timestamp
+      required: [docKey, userId, app, collection, visibility, createdAt, updatedAt]
+
+    SyncChange:
+      type: object
+      description: A single document change from the client
+      properties:
+        key:
+          type: string
+          description: Document key (unique within the collection)
+        doc:
+          type: object
+          description: Full document content (all fields)
+          additionalProperties: true
+        fieldRevs:
+          type: object
+          description: |
+            Flat dot-path map from field name to HLC string indicating the clock
+            at which each field was last written on the client.
+            Example: `{ "meta.name": "0018e9a1f3a00-000001-client", "days.2026-01-01": "0018e9a1f3a00-000002-client" }`
+          additionalProperties:
+            type: string
+        baseClock:
+          type: string
+          description: |
+            The last serverClock the client received before making these changes.
+            Used to determine which fields have diverged. Send `HLC.zero()` ("0000000000000-000000-")
+            for new documents.
+      required: [key, doc, fieldRevs, baseClock]
+
+    SyncRequest:
+      type: object
+      description: Sync request body
+      properties:
+        collection:
+          type: string
+          description: Collection name within the application (e.g. planners, tasks)
+          example: planners
+        clientClock:
+          type: string
+          description: |
+            The client's current HLC — the highest clock value it has seen from
+            the server. On first sync, send `"0000000000000-000000-"` (HLC.zero()).
+          example: '0018e9a1f3a00-000001-client'
+        changes:
+          type: array
+          description: |
+            Client-side changes to push to the server. May be empty (`[]`) to
+            perform a pull-only sync.
+          items:
+            $ref: '#/components/schemas/SyncChange'
+      required: [collection, clientClock]
+
+    ConflictRecord:
+      type: object
+      description: A field-level conflict record returned when both client and server changed the same field
+      properties:
+        key:
+          type: string
+          description: Document key
+        collection:
+          type: string
+          description: Collection name
+        field:
+          type: string
+          description: Field name (dot-path) that conflicted
+        localRev:
+          type: string
+          description: Client's HLC for this field
+        remoteRev:
+          type: string
+          description: Server's HLC for this field
+        localValue:
+          description: Client's value for this field
+        remoteValue:
+          description: Server's value for this field
+        winner:
+          type: string
+          enum: [local, remote, auto-merged]
+          description: Which value won the conflict
+        winnerValue:
+          description: The winning value (stored value after merge)
+        mergeStrategy:
+          type: string
+          description: Present when winner is 'auto-merged' — always 'text-auto-merged'
+      required: [key, collection, field, localRev, remoteRev, winner, winnerValue]
+
+    SyncResponse:
+      type: object
+      description: Sync response body
+      properties:
+        serverClock:
+          type: string
+          description: |
+            The server's current HLC after processing this sync. Store this and
+            send it as `clientClock` on the next sync request.
+        serverChanges:
+          type: array
+          description: |
+            Documents the client has not yet seen (those with server HLC > clientClock).
+            Empty when the client is already up to date.
+          items:
+            type: object
+            description: A server document record with internal HLC metadata
+            properties:
+              _key:
+                type: string
+                description: Document key
+              _clock:
+                type: string
+                description: Server HLC at which this document was last written
+              _fieldRevs:
+                type: object
+                description: Per-field HLC revision map
+                additionalProperties:
+                  type: string
+            additionalProperties: true
+        conflicts:
+          type: array
+          description: Field-level conflict records for fields where both sides changed
+          items:
+            $ref: '#/components/schemas/ConflictRecord'
+      required: [serverClock, serverChanges, conflicts]
