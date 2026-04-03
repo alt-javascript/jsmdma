@@ -25,6 +25,10 @@ tags:
     description: Organisation management
   - name: docIndex
     description: Document ownership and sharing index
+  - name: search
+    description: ACL-gated document search
+  - name: account
+    description: Account management — export and deletion
 
 paths:
   /health:
@@ -122,6 +126,148 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
           description: Unknown application name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /{application}/search:
+    post:
+      summary: Search documents with ACL scoping
+      description: |
+        Searches documents in the given collection for the given application, returning
+        only documents the requesting user is authorised to see.
+
+        ACL rules (same as `changesSince`):
+        - **private** documents: owner only
+        - **shared** documents: owner + users in the `sharedWith` list
+        - **org** documents: org members (when matching org context)
+        - **public** documents: any authenticated user
+
+        The `filter` field must be a pre-built jsnosqlc Filter AST object — the
+        serialised output of calling `.build()` on a jsnosqlc Filter chain.
+        The server ANDs the caller's filter with ACL constraints; arbitrary client
+        filters are safe.
+
+        The `application` path parameter must match a name registered in
+        ApplicationRegistry — unknown names return 404.
+      operationId: searchDocuments
+      tags: [search]
+      parameters:
+        - name: application
+          in: path
+          required: true
+          description: Application name — must match a registered application
+          schema:
+            type: string
+            example: year-planner
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                collection:
+                  type: string
+                  description: Collection name within the application (e.g. planners, tasks)
+                  example: planners
+                filter:
+                  $ref: '#/components/schemas/FilterAst'
+              required: [collection, filter]
+      responses:
+        '200':
+          description: Search results — documents the caller is authorised to see that match the filter
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    description: Matching document records
+                    items:
+                      type: object
+                      description: A document record (application fields + sync metadata)
+                      additionalProperties: true
+                required: [results]
+        '400':
+          description: Missing or invalid request body (missing collection, missing filter, filter has no type field)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Unknown application name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /account/export:
+    get:
+      summary: Export all personal data
+      description: |
+        Returns a structured JSON envelope containing all personal data for the
+        authenticated user: the user record, all personal documents across all
+        configured applications and collections, and all docIndex entries owned
+        by the user.
+
+        Intended for GDPR-style data portability. Export before calling
+        `DELETE /account` to preserve a local copy.
+
+        Returns 404 if the user record no longer exists (e.g. after deletion).
+      operationId: exportUser
+      tags: [account]
+      responses:
+        '200':
+          description: User data export envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserExportEnvelope'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /account:
+    delete:
+      summary: Hard-delete the authenticated user account
+      description: |
+        Permanently removes all traces of the authenticated user:
+
+        - All personal synced documents across every configured application and collection
+        - All docIndex entries owned by the user
+        - All org membership records
+        - All OAuth provider index entries
+        - The user identity record
+
+        This operation is **irreversible**. Export data first via `GET /account/export`
+        if a copy is needed.
+
+        Returns 204 on success with no response body.
+      operationId: deleteUser
+      tags: [account]
+      responses:
+        '204':
+          description: Account and all associated data deleted
+        '401':
+          description: Authentication required
           content:
             application/json:
               schema:
@@ -765,6 +911,103 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /orgs/{orgId}/export:
+    get:
+      summary: Export all org data
+      description: |
+        Returns a structured JSON envelope containing all data for the given
+        organisation: the org record, all member records, and all org-scoped
+        documents across every configured application and collection.
+
+        Requires the caller to be an **org-admin** of the specified organisation.
+        Regular members receive 403.
+
+        Returns 404 if the organisation does not exist.
+      operationId: exportOrg
+      tags: [orgs]
+      parameters:
+        - name: orgId
+          in: path
+          required: true
+          description: Organisation UUID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Org data export envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrgExportEnvelope'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Caller is not an org-admin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Organisation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /orgs/{orgId}:
+    delete:
+      summary: Hard-delete an organisation
+      description: |
+        Permanently removes all traces of the specified organisation:
+
+        - All org-scoped documents across every configured application and collection
+        - All org membership records
+        - The org name uniqueness reservation
+        - The org identity record
+
+        Requires the caller to be an **org-admin** of the specified organisation.
+
+        This operation is **irreversible**. Export data first via
+        `GET /orgs/{orgId}/export` if a copy is needed.
+
+        Returns 204 on success with no response body.
+      operationId: deleteOrg
+      tags: [orgs]
+      parameters:
+        - name: orgId
+          in: path
+          required: true
+          description: Organisation UUID
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Organisation and all associated data deleted
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Caller is not an org-admin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Organisation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /docIndex/{app}/{docKey}:
     get:
       summary: Get document index entry
@@ -1217,3 +1460,122 @@ components:
           items:
             $ref: '#/components/schemas/ConflictRecord'
       required: [serverClock, serverChanges, conflicts]
+
+    FilterAst:
+      type: object
+      description: |
+        A jsnosqlc Filter AST node — the serialised output of calling `.build()` on
+        a jsnosqlc Filter chain. Use `type: condition` for a single field comparison,
+        `and` / `or` for compound filters, or `not` for negation.
+
+        Example (single condition):
+        ```json
+        { "type": "condition", "field": "meta.name", "op": "contains", "value": "Plan" }
+        ```
+
+        Example (compound AND):
+        ```json
+        {
+          "type": "and",
+          "conditions": [
+            { "type": "condition", "field": "meta.year", "op": "eq", "value": 2026 },
+            { "type": "condition", "field": "meta.name", "op": "contains", "value": "Plan" }
+          ]
+        }
+        ```
+      properties:
+        type:
+          type: string
+          enum: [condition, and, or, not]
+          description: AST node type
+        field:
+          type: string
+          description: Dot-path field name to compare (for `condition` nodes)
+          example: meta.name
+        op:
+          type: string
+          description: "Comparison operator (for `condition` nodes): eq, ne, gt, gte, lt, lte, contains, startsWith"
+          example: contains
+        value:
+          description: Value to compare against (for `condition` nodes)
+        conditions:
+          type: array
+          description: Sub-conditions (for `and`, `or`, `not` nodes)
+          items:
+            $ref: '#/components/schemas/FilterAst'
+      required: [type]
+
+    UserExportEnvelope:
+      type: object
+      description: |
+        Full data export envelope for a single user. Returned by `GET /account/export`.
+        Documents are grouped by application name, then by collection name.
+      properties:
+        user:
+          $ref: '#/components/schemas/UserIdentity'
+        docs:
+          type: object
+          description: Personal documents grouped by app name, then collection name
+          additionalProperties:
+            type: object
+            description: Collections within this application
+            additionalProperties:
+              type: array
+              description: Documents in this collection
+              items:
+                type: object
+                description: Document record (application fields + sync metadata)
+                additionalProperties: true
+        docIndex:
+          type: array
+          description: All docIndex entries owned by this user
+          items:
+            $ref: '#/components/schemas/DocIndexEntry'
+      required: [user, docs, docIndex]
+
+    OrgExportEnvelope:
+      type: object
+      description: |
+        Full data export envelope for an organisation. Returned by `GET /orgs/{orgId}/export`.
+        Documents are grouped by application name, then by collection name.
+      properties:
+        org:
+          type: object
+          description: Organisation record
+          properties:
+            orgId:
+              type: string
+              format: uuid
+              description: Organisation UUID
+            name:
+              type: string
+              description: Organisation name
+            createdBy:
+              type: string
+              format: uuid
+              description: UUID of the user who created the org
+            createdAt:
+              type: string
+              format: date-time
+              description: ISO 8601 creation timestamp
+          required: [orgId, name, createdBy, createdAt]
+        members:
+          type: array
+          description: All current org members
+          items:
+            $ref: '#/components/schemas/MemberRecord'
+        docs:
+          type: object
+          description: Org-scoped documents grouped by app name, then collection name
+          additionalProperties:
+            type: object
+            description: Collections within this application
+            additionalProperties:
+              type: array
+              description: Documents in this collection
+              items:
+                type: object
+                description: Document record (application fields + sync metadata)
+                additionalProperties: true
+      required: [org, members, docs]
+

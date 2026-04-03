@@ -132,9 +132,13 @@ export default class AppSyncController {
       }
     }
 
-    // Pass the pre-computed storageCollection as 'collection'; omit userId/application
-    // so SyncService uses the provided key as-is (fallback path when userId is undefined).
-    const result = await this.syncService.sync(storageCollection, clientClock, changes);
+    // For org-scoped sync the storage key is already fully qualified (org:...) so we
+    // pass it as-is and omit userId/application — the org namespace is isolated and
+    // ACL fan-out is not needed.  For personal sync we pass the logical collection name
+    // plus userId and application so SyncService can handle namespacing AND ACL fan-out.
+    const result = orgId
+      ? await this.syncService.sync(storageCollection, clientClock, changes)
+      : await this.syncService.sync(collection, clientClock, changes, userId, application);
 
     // ── Document ownership index ───────────────────────────────────────────────
     // Upsert a docIndex entry for every incoming write so ownership is tracked from

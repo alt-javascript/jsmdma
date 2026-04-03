@@ -83,4 +83,30 @@ export default class SyncRepository {
     this.logger?.info?.(`[SyncRepository] changesSince ${collection} clock=${clientClock} results=${docs.length}`);
     return docs;
   }
+
+  /**
+   * Delete a document by key.
+   *
+   * @param {string} collection
+   * @param {string} key
+   * @returns {Promise<void>}
+   */
+  async delete(collection, key) {
+    await this._col(collection).delete(key);
+    this.logger?.info?.(`[SyncRepository] delete ${collection}/${key}`);
+  }
+
+  /**
+   * Return all documents in a collection matching the given filter AST.
+   *
+   * @param {string} collection  — namespaced storage collection key
+   * @param {Object} filterAst   — pre-built filter AST (from Filter.where(...).build())
+   * @returns {Promise<Object[]>}
+   */
+  async findByFilter(collection, filterAst) {
+    const cursor = await this._col(collection).find(filterAst);
+    const docs   = await cursor.getDocuments();
+    this.logger?.info?.(`[SyncRepository] findByFilter ${collection} results=${docs.length}`);
+    return docs;
+  }
 }

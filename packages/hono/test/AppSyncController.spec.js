@@ -718,3 +718,137 @@ describe('AppSyncController — DocumentIndexRepository upsert on sync write', (
     assert.deepEqual(keys, ['multi-1', 'multi-2', 'multi-3']);
   });
 });
+
+// ── DocumentIndexRepository ACL integration ───────────────────────────────────
+//
+// End-to-end ACL tests through the full HTTP stack.  The context wires
+// DocumentIndexRepository so SyncService receives it via CDI and activates
+// the ACL fan-out path.  Tests verify:
+//   - Bob's sync does NOT return Alice's private doc (isolation)
+//   - Bob's sync DOES return Alice's shared doc (fan-out)
+//   - Alice's private doc is absent even when Bob's shared doc is present
+
+describe('AppSyncController — DocumentIndexRepository ACL integration', () => {
+  let appCtx;
+  let app;
+  let docIndexRepo;
+
+  beforeEach(async () => {
+    appCtx       = await buildContextWithDocIndex();
+    app          = appCtx.get('honoAdapter').app;
+    docIndexRepo = appCtx.get('documentIndexRepository');
+  });
+
+  it("Bob's sync does NOT return Alice's private doc", async () => {
+    const aliceToken = await makeToken('alice-acl');
+    const bobToken   = await makeToken('bob-acl');
+    const t1         = HLC.tick(HLC.zero(), Date.now());
+
+    // Alice pushes a private doc
+    await syncPost(app, 'shopping-list', {
+      collection:  'items',
+      clientClock: HLC.zero(),
+      changes: [{
+        key:       'alice-private',
+        doc:       { name: 'Alice private item' },
+        fieldRevs: { name: t1 },
+        baseClock: HLC.zero(),
+      }],
+    }, aliceToken);
+
+    // docIndex entry created with visibility=private — no further action
+
+    // Bob syncs — must NOT see Alice's private doc
+    const res  = await syncPost(app, 'shopping-list', {
+      collection:  'items',
+      clientClock: HLC.zero(),
+      changes:     [],
+    }, bobToken);
+
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    const keys = body.serverChanges.map((d) => d._key);
+    assert.notInclude(keys, 'alice-private', "Bob must not see Alice's private doc");
+    assert.isEmpty(body.serverChanges, 'Bob should see no docs at all');
+  });
+
+  it("Bob's sync returns Alice's shared doc when sharedWith Bob", async () => {
+    const aliceToken = await makeToken('alice-acl2');
+    const bobToken   = await makeToken('bob-acl2');
+    const t1         = HLC.tick(HLC.zero(), Date.now());
+
+    // Alice pushes a doc → docIndex entry is auto-created (private)
+    await syncPost(app, 'shopping-list', {
+      collection:  'items',
+      clientClock: HLC.zero(),
+      changes: [{
+        key:       'alice-shared',
+        doc:       { name: 'Alice shared item' },
+        fieldRevs: { name: t1 },
+        baseClock: HLC.zero(),
+      }],
+    }, aliceToken);
+
+    // Promote the docIndex entry to shared + grant Bob access
+    await docIndexRepo.setVisibility('alice-acl2', 'shopping-list', 'alice-shared', 'shared');
+    await docIndexRepo.addSharedWith('alice-acl2', 'shopping-list', 'alice-shared', 'bob-acl2', 'shopping-list');
+
+    // Bob syncs — should receive Alice's shared doc via ACL fan-out
+    const res  = await syncPost(app, 'shopping-list', {
+      collection:  'items',
+      clientClock: HLC.zero(),
+      changes:     [],
+    }, bobToken);
+
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    const keys = body.serverChanges.map((d) => d._key);
+    assert.include(keys, 'alice-shared', "Bob must see Alice's shared doc");
+    const sharedDoc = body.serverChanges.find((d) => d._key === 'alice-shared');
+    assert.equal(sharedDoc.name, 'Alice shared item');
+  });
+
+  it("Alice's private doc is absent when a different doc is shared with Bob", async () => {
+    const aliceToken = await makeToken('alice-acl3');
+    const bobToken   = await makeToken('bob-acl3');
+    const t1         = HLC.tick(HLC.zero(), Date.now());
+
+    // Alice pushes two docs: one private, one shared
+    await syncPost(app, 'shopping-list', {
+      collection:  'items',
+      clientClock: HLC.zero(),
+      changes: [
+        {
+          key:       'alice-private3',
+          doc:       { name: 'Alice private' },
+          fieldRevs: { name: t1 },
+          baseClock: HLC.zero(),
+        },
+        {
+          key:       'alice-shared3',
+          doc:       { name: 'Alice shared' },
+          fieldRevs: { name: t1 },
+          baseClock: HLC.zero(),
+        },
+      ],
+    }, aliceToken);
+
+    // Share only alice-shared3 with Bob
+    await docIndexRepo.setVisibility('alice-acl3', 'shopping-list', 'alice-shared3', 'shared');
+    await docIndexRepo.addSharedWith('alice-acl3', 'shopping-list', 'alice-shared3', 'bob-acl3', 'shopping-list');
+
+    // Bob syncs — should see shared3 but NOT private3
+    const res  = await syncPost(app, 'shopping-list', {
+      collection:  'items',
+      clientClock: HLC.zero(),
+      changes:     [],
+    }, bobToken);
+
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    const keys = body.serverChanges.map((d) => d._key);
+    assert.include(keys,    'alice-shared3',  'Bob must see the shared doc');
+    assert.notInclude(keys, 'alice-private3', 'Bob must NOT see the private doc');
+    assert.lengthOf(body.serverChanges, 1, 'exactly one doc visible to Bob');
+  });
+});

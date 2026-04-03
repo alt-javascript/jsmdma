@@ -416,6 +416,23 @@ DELETE /docIndex/year-planner/planner-2026/shareToken
 Authorization: Bearer <token>
 ```
 
+### Search and ACL
+
+The `POST /:application/search` endpoint enforces the same ACL rules as `changesSince`. Setting a document's visibility to `public` makes it discoverable in open search results for any authenticated user. A share token alone does not cause a document to appear in search results — share tokens are for direct-link sharing only.
+
+```js
+// Search for planners matching a filter — ACL-scoped automatically
+const response = await fetch('/year-planner/search', {
+  method: 'POST',
+  headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    collection: 'planners',
+    filter: { type: 'condition', field: 'meta.name', op: 'contains', value: 'Plan' },
+  }),
+});
+const { results } = await response.json();
+```
+
 ---
 
 ## 8. HLC Usage
@@ -465,9 +482,9 @@ const order = HLC.compare(a, b);
 
 | Resource | Description |
 |---|---|
-| `packages/example/run-apps.js` | Working end-to-end scenarios — see Scenario 3 (valid sync), 5 (text auto-merge), 8 (org sync), 9 (DocIndex read), 10 (DocIndex PATCH), 11 (share token), 12 (HTTP org creation) |
-| `docs/openapi.yaml` | Machine-readable OpenAPI 3.1 spec for all 18 endpoints |
-| `docs/data-model.md` | Entity model, storage key patterns, ER diagrams for flat and org-enabled modes |
+| `packages/example/run-apps.js` | Working end-to-end scenarios — Scenario 3 (valid sync), 5 (text auto-merge), 7 (org sync), 8–10 (year-planner + schema validation + conflict-free multi-device edit), 11 (DocIndex + share token), 12 (HTTP org creation), 13 (ACL delivery: shared doc in sync), 14 (search ACL scoping), 15 (user export), 16 (org export), 17 (user hard-delete → 404), 18 (org hard-delete → 404) |
+| `docs/openapi.yaml` | Machine-readable OpenAPI 3.1 spec for all 23 endpoints |
+| `docs/data-model.md` | Entity model, storage key patterns, ER diagrams, sharing model, export envelopes, and deletion cascade |
 | `packages/server/schemas/` | Server-side JSON Schema files: `appConfig.json`, `docIndex.json`, `org.json`, `orgMember.json`, `user.json` |
 | `packages/core/index.js` | Public exports: `HLC`, `diff`, `merge`, `textMerge` |
 | `packages/auth-core/` | `JwtSession` — JWT mint/verify helpers |

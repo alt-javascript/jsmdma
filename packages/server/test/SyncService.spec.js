@@ -1,8 +1,8 @@
 /**
  * SyncService.spec.js — Unit tests for SyncService
  *
- * Tests namespacing, text auto-merge, and HLC fallback through the service
- * directly (no HTTP layer).  Uses jsnosqlc-memory for storage.
+ * Tests namespacing, text auto-merge, HLC fallback, nested doc support, and
+ * ACL fan-out through the service directly (no HTTP layer). Uses jsnosqlc-memory.
  */
 import { assert } from 'chai';
 import '@alt-javascript/jsnosqlc-memory';
@@ -10,6 +10,7 @@ import { DriverManager } from '@alt-javascript/jsnosqlc-core';
 import { HLC } from '@alt-javascript/data-api-core';
 import SyncRepository from '../SyncRepository.js';
 import SyncService from '../SyncService.js';
+import DocumentIndexRepository from '../DocumentIndexRepository.js';
 
 async function buildService() {
   const client = await DriverManager.getClient('jsnosqlc:memory:');
@@ -17,6 +18,21 @@ async function buildService() {
   const svc  = new SyncService();
   svc.syncRepository = repo;
   return { svc, repo, client };
+}
+
+/**
+ * Build a SyncService wired with a DocumentIndexRepository, both sharing the
+ * same in-memory nosqlClient so sync storage and docIndex storage are isolated
+ * in the same memory instance (different collection names keep them separate).
+ */
+async function buildServiceWithDocIndex() {
+  const client = await DriverManager.getClient('jsnosqlc:memory:');
+  const syncRepo = new SyncRepository(client);
+  const docIndexRepo = new DocumentIndexRepository(client);
+  const svc = new SyncService();
+  svc.syncRepository = syncRepo;
+  svc.documentIndexRepository = docIndexRepo;
+  return { svc, syncRepo, docIndexRepo, client };
 }
 
 describe('SyncService', () => {
@@ -161,6 +177,192 @@ describe('SyncService', () => {
       // Sync with the serverClock we received — should get nothing new
       const r3 = await svc.sync('items', r1.serverClock, [], 'user-Z', 'myapp');
       assert.isEmpty(r3.serverChanges);
+    });
+  });
+
+  // ── nested document support (dot-path fieldRevs) ──────────────────────────────
+
+  describe('nested document support (dot-path fieldRevs)', () => {
+    it('two clients editing different leaf paths of a planner doc merge cleanly', async () => {
+      const { svc, repo } = await buildService();
+      const t0 = HLC.tick(HLC.zero(), 1000);
+      const tA = HLC.tick(t0, 2000); // tA > t0
+      const tB = HLC.tick(t0, 3000); // tB > t0
+
+      // Seed a base document that both clients have seen (at t0)
+      await repo.store('user-1:planner:plans', 'plan-1',
+        {
+          meta: { name: 'Work 2026' },
+          days: {},
+        },
+        { meta: t0, days: t0 },
+        t0,
+      );
+
+      // Client A updates meta.name (fieldRev for 'meta' is tA)
+      const r1 = await svc.sync('plans', t0, [{
+        key: 'plan-1',
+        doc: {
+          meta: { name: 'Work 2026 Revised' },
+          days: {},
+        },
+        fieldRevs: { meta: tA },   // tA > t0 → clientChanged for 'meta'
+        baseClock: t0,
+      }], 'user-1', 'planner');
+
+      assert.isEmpty(r1.conflicts, 'Client A: no conflicts (only A changed meta)');
+
+      // tB > t0 → clientChanged for 'days'.
+      // SyncService sees serverChanged for 'meta' (tA > t0) and clientChanged for
+      // 'days' (tB > t0): each side changed only its own top-level key → no conflict.
+      const r2 = await svc.sync('plans', t0, [{
+        key: 'plan-1',
+        doc: {
+          meta: { name: 'Work 2026' },
+          days: { '2026-03-28': { tl: 'standup', col: 0 } },
+        },
+        fieldRevs: { days: tB },   // tB > t0 → clientChanged for 'days'
+        baseClock: t0,
+      }], 'user-1', 'planner');
+
+      assert.isEmpty(r2.conflicts, 'Client B: no conflicts (only B changed days)');
+
+      // Pull final converged state and verify both edits are present
+      const { serverChanges } = await svc.sync('plans', HLC.zero(), [], 'user-1', 'planner');
+      assert.lengthOf(serverChanges, 1, 'one document in the collection');
+
+      const final = serverChanges[0];
+      assert.deepEqual(final.meta, { name: 'Work 2026 Revised' },
+        'A\'s meta.name edit present in merged doc');
+      assert.deepEqual(final.days['2026-03-28'], { tl: 'standup', col: 0 },
+        'B\'s days.tl edit present in merged doc');
+      assert.isEmpty(r1.conflicts.concat(r2.conflicts), 'zero total conflicts across both syncs');
+    });
+  });
+
+  // ── ACL fan-out ──────────────────────────────────────────────────────────────
+
+  describe('ACL fan-out via documentIndexRepository', () => {
+    it('null-guard: when documentIndexRepository is null, sync returns only own docs', async () => {
+      // Use buildService() — no documentIndexRepository wired
+      const { svc, repo } = await buildService();
+      const t1 = HLC.tick(HLC.zero(), Date.now());
+
+      // Store Alice's doc directly in Alice's namespace
+      await repo.store('alice:planner:docs', 'alice-doc-1',
+        { title: 'Alice private' }, { title: t1 }, t1);
+
+      // Bob syncs — should NOT see Alice's doc (documentIndexRepository is null)
+      const { serverChanges } = await svc.sync('docs', HLC.zero(), [], 'bob', 'planner');
+      assert.isEmpty(serverChanges, 'Bob must not see cross-namespace docs when docIndex is null');
+    });
+
+    it("Bob receives Alice's doc that is visibility:shared with Bob", async () => {
+      const { svc, syncRepo, docIndexRepo } = await buildServiceWithDocIndex();
+      const t1 = HLC.tick(HLC.zero(), Date.now());
+
+      // Alice stores her doc in her namespace
+      await syncRepo.store('alice:planner:docs', 'alice-shared-doc',
+        { title: 'Shared year planner' }, { title: t1 }, t1);
+
+      // Index it with visibility:shared and share with bob
+      await docIndexRepo.upsertOwnership('alice', 'planner', 'alice-shared-doc', 'docs');
+      await docIndexRepo.setVisibility('alice', 'planner', 'alice-shared-doc', 'shared');
+      await docIndexRepo.addSharedWith('alice', 'planner', 'alice-shared-doc', 'bob', 'planner');
+
+      // Bob syncs
+      const { serverChanges } = await svc.sync('docs', HLC.zero(), [], 'bob', 'planner');
+
+      const titles = serverChanges.map((d) => d.title);
+      assert.include(titles, 'Shared year planner', "Bob must receive Alice's shared doc");
+    });
+
+    it("Bob does NOT receive Alice's doc that is visibility:private", async () => {
+      const { svc, syncRepo, docIndexRepo } = await buildServiceWithDocIndex();
+      const t1 = HLC.tick(HLC.zero(), Date.now());
+
+      // Alice stores a private doc in her namespace
+      await syncRepo.store('alice:planner:docs', 'alice-private-doc',
+        { title: 'Alice private notes' }, { title: t1 }, t1);
+
+      // Index it — visibility stays 'private' (default from upsertOwnership)
+      await docIndexRepo.upsertOwnership('alice', 'planner', 'alice-private-doc', 'docs');
+      // No setVisibility call — stays private
+
+      // Bob syncs
+      const { serverChanges } = await svc.sync('docs', HLC.zero(), [], 'bob', 'planner');
+
+      const titles = serverChanges.map((d) => d.title);
+      assert.notInclude(titles, 'Alice private notes', "Bob must not receive Alice's private doc");
+    });
+
+    it("Bob receives Alice's doc that is visibility:public", async () => {
+      const { svc, syncRepo, docIndexRepo } = await buildServiceWithDocIndex();
+      const t1 = HLC.tick(HLC.zero(), Date.now());
+
+      // Alice stores a public doc
+      await syncRepo.store('alice:planner:docs', 'alice-public-doc',
+        { title: 'Public announcement' }, { title: t1 }, t1);
+
+      // Index it as public
+      await docIndexRepo.upsertOwnership('alice', 'planner', 'alice-public-doc', 'docs');
+      await docIndexRepo.setVisibility('alice', 'planner', 'alice-public-doc', 'public');
+
+      // Bob syncs
+      const { serverChanges } = await svc.sync('docs', HLC.zero(), [], 'bob', 'planner');
+
+      const titles = serverChanges.map((d) => d.title);
+      assert.include(titles, 'Public announcement', "Bob must receive Alice's public doc");
+    });
+
+    it('cross-namespace doc is filtered by clientClock (not returned if already seen)', async () => {
+      const { svc, syncRepo, docIndexRepo } = await buildServiceWithDocIndex();
+      const t1 = HLC.tick(HLC.zero(), Date.now());
+
+      // Alice stores a shared doc
+      await syncRepo.store('alice:planner:docs', 'alice-shared-seen',
+        { title: 'Already seen shared doc' }, { title: t1 }, t1);
+
+      await docIndexRepo.upsertOwnership('alice', 'planner', 'alice-shared-seen', 'docs');
+      await docIndexRepo.setVisibility('alice', 'planner', 'alice-shared-seen', 'shared');
+      await docIndexRepo.addSharedWith('alice', 'planner', 'alice-shared-seen', 'bob', 'planner');
+
+      // First sync — Bob gets the doc; capture the serverClock
+      const r1 = await svc.sync('docs', HLC.zero(), [], 'bob', 'planner');
+      assert.isTrue(r1.serverChanges.some((d) => d.title === 'Already seen shared doc'),
+        'Bob must receive doc on first sync');
+
+      // Second sync using the serverClock from first sync — doc already seen, not returned
+      const r2 = await svc.sync('docs', r1.serverClock, [], 'bob', 'planner');
+      const titles2 = r2.serverChanges.map((d) => d.title);
+      assert.notInclude(titles2, 'Already seen shared doc',
+        'Bob must not receive the same shared doc twice once clientClock advances');
+    });
+
+    it("Bob only receives shared doc, not Alice's private doc, when both exist", async () => {
+      const { svc, syncRepo, docIndexRepo } = await buildServiceWithDocIndex();
+      const t1 = HLC.tick(HLC.zero(), Date.now());
+
+      // Alice has two docs in her namespace: one private, one shared with Bob
+      await syncRepo.store('alice:planner:docs', 'alice-private',
+        { title: 'Alice private' }, { title: t1 }, t1);
+      await syncRepo.store('alice:planner:docs', 'alice-shared',
+        { title: 'Alice shared' }, { title: t1 }, t1);
+
+      // Index private doc — stays private
+      await docIndexRepo.upsertOwnership('alice', 'planner', 'alice-private', 'docs');
+
+      // Index shared doc — share with bob
+      await docIndexRepo.upsertOwnership('alice', 'planner', 'alice-shared', 'docs');
+      await docIndexRepo.setVisibility('alice', 'planner', 'alice-shared', 'shared');
+      await docIndexRepo.addSharedWith('alice', 'planner', 'alice-shared', 'bob', 'planner');
+
+      // Bob syncs
+      const { serverChanges } = await svc.sync('docs', HLC.zero(), [], 'bob', 'planner');
+      const titles = serverChanges.map((d) => d.title);
+
+      assert.include(titles, 'Alice shared', 'Bob must receive the shared doc');
+      assert.notInclude(titles, 'Alice private', 'Bob must not receive the private doc');
     });
   });
 

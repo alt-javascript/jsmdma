@@ -155,6 +155,18 @@ export default class OrgRepository {
     return cursor.getDocuments();
   }
 
+  /**
+   * Hard-delete an org by ID.
+   * Does NOT cascade membership removal — caller (DeletionService) must do that first.
+   *
+   * @param {string} orgId
+   * @returns {Promise<void>}
+   */
+  async deleteOrg(orgId) {
+    await this._orgs().delete(orgId);
+    this.logger?.info?.(`[OrgRepository] deleteOrg orgId=${orgId}`);
+  }
+
   // ── orgNames index ────────────────────────────────────────────────────────
 
   /**

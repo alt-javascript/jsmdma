@@ -176,4 +176,19 @@ describe('OrgRepository', () => {
     });
   });
 
+  // ── deleteOrg ────────────────────────────────────────────────────────────────
+
+  it('deleteOrg removes the org record; getOrg returns null after', async () => {
+    const repo = await makeRepo();
+    await repo.createOrg('org-del', 'DeleteMe Corp', 'user-admin');
+
+    const before = await repo.getOrg('org-del');
+    assert.isNotNull(before);
+
+    await repo.deleteOrg('org-del');
+
+    const after = await repo.getOrg('org-del');
+    assert.isNull(after);
+  });
+
 });

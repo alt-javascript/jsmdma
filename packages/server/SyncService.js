@@ -39,6 +39,7 @@ export default class SyncService {
     // CDI will autowire these; direct injection used in tests
     this.syncRepository = null;
     this.logger = null;
+    this.documentIndexRepository = null;
   }
 
   /**
@@ -169,8 +170,48 @@ export default class SyncService {
       await this.syncRepository.store(storageCollection, key, mergedDoc, mergedFieldRevs, serverClock);
     }
 
-    // Return everything the client hasn't seen yet
+    // Return everything the client hasn't seen yet (own namespace)
     const serverChanges = await this.syncRepository.changesSince(storageCollection, clientClock);
+
+    // ACL fan-out: aggregate cross-namespace shared docs when documentIndexRepository is wired
+    if (this.documentIndexRepository != null && userId != null && application != null) {
+      // Get all docIndex entries visible to this user for this app
+      const accessibleEntries = await this.documentIndexRepository.listAccessibleDocs(userId, application);
+
+      // Group cross-namespace entries by owner (skip own docs — already fetched above)
+      const byOwner = new Map();
+      for (const entry of accessibleEntries) {
+        if (entry.userId === userId) continue; // own docs handled by storageCollection query
+        if (!byOwner.has(entry.userId)) byOwner.set(entry.userId, []);
+        byOwner.get(entry.userId).push(entry);
+      }
+
+      // For each distinct owner, fetch their namespace changes and filter to accessible keys
+      for (const [ownerId, entries] of byOwner) {
+        // Build a set of accessible docKeys for fast lookup
+        const accessibleKeys = new Set(entries.map((e) => e.docKey));
+
+        // Group entries by collection so we make one changesSince call per owner:collection
+        const byCollection = new Map();
+        for (const entry of entries) {
+          if (!byCollection.has(entry.collection)) byCollection.set(entry.collection, []);
+          byCollection.get(entry.collection).push(entry);
+        }
+
+        for (const [col, colEntries] of byCollection) {
+          const crossNamespaceKey = namespaceKey(ownerId, application, col);
+          const crossChanges = await this.syncRepository.changesSince(crossNamespaceKey, clientClock);
+
+          // Keep only docs whose _key appears in the accessible docIndex entries
+          const colAccessibleKeys = new Set(colEntries.map((e) => e.docKey));
+          for (const doc of crossChanges) {
+            if (colAccessibleKeys.has(doc._key)) {
+              serverChanges.push(doc);
+            }
+          }
+        }
+      }
+    }
 
     this.logger?.info?.(
       `[SyncService] sync userId=${userId ?? 'anon'} app=${application ?? 'none'} collection=${collection} storageKey=${storageCollection} clientClock=${clientClock} applied=${changes.length} returning=${serverChanges.length} conflicts=${allConflicts.length}`,

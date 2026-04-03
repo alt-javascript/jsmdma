@@ -164,6 +164,17 @@ export default class DocumentIndexRepository {
   }
 
   /**
+   * Delete a docIndex entry by its composite key.
+   *
+   * @param {string} compositeKey — the `_key` field stored on the entry
+   * @returns {Promise<void>}
+   */
+  async delete(compositeKey) {
+    await this._col().delete(compositeKey);
+    this.logger?.info?.(`[DocumentIndexRepository] delete ${compositeKey}`);
+  }
+
+  /**
    * Return all docIndex entries for a given owner (userId + app).
    * Performs a filter scan over the 'docIndex' collection.
    *
@@ -177,5 +188,58 @@ export default class DocumentIndexRepository {
     const docs = await cursor.getDocuments();
     this.logger?.info?.(`[DocumentIndexRepository] listByUser userId=${userId} app=${app} count=${docs.length}`);
     return docs;
+  }
+
+  /**
+   * Return all docIndex entries visible to requestorId for a given app.
+   *
+   * ACL rules applied (in order):
+   *   1. Own docs          — userId === requestorId (any visibility)
+   *   2. Public docs       — visibility === 'public' (any owner)
+   *   3. Shared docs       — visibility === 'shared' AND sharedWith contains
+   *                          { userId: requestorId, app }
+   *   4. Org docs          — visibility === 'org' AND orgIds.length > 0
+   *                          // TODO S02: org cross-namespace fan-out requires owner orgId lookup
+   *
+   * Uses a single app-level scan (Filter.where('app').eq(app)) because the
+   * memory driver does NOT support dot-path array traversal in filter predicates.
+   * JS-side filtering is applied after the scan.
+   *
+   * @param {string}   requestorId — userId of the requestor
+   * @param {string}   app         — app namespace to scan
+   * @param {string[]} [orgIds=[]] — org IDs the requestor belongs to (reserved for S02)
+   * @returns {Promise<Object[]>}
+   */
+  async listAccessibleDocs(requestorId, app, orgIds = []) {
+    const filter = Filter.where('app').eq(app).build();
+    const cursor = await this._col().find(filter);
+    const docs = await cursor.getDocuments();
+
+    const visible = docs.filter((doc) => {
+      // Rule 1: own doc — always visible regardless of visibility setting
+      if (doc.userId === requestorId) return true;
+
+      // Rule 2: explicitly public
+      if (doc.visibility === 'public') return true;
+
+      // Rule 3: shared with requestorId in this app namespace
+      if (doc.visibility === 'shared') {
+        return (doc.sharedWith ?? []).some(
+          (e) => e.userId === requestorId && e.app === app
+        );
+      }
+
+      // Rule 4: org-visibility cross-namespace fan-out (deferred)
+      // TODO S02: org cross-namespace fan-out requires owner orgId lookup
+      // if (doc.visibility === 'org' && orgIds.length > 0) { ... }
+
+      return false;
+    });
+
+    this.logger?.info?.(
+      `[DocumentIndexRepository] listAccessibleDocs requestorId=${requestorId} app=${app} ` +
+      `scanned=${docs.length} visible=${visible.length}`
+    );
+    return visible;
   }
 }

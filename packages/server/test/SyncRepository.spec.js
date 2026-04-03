@@ -115,4 +115,21 @@ describe('SyncRepository', () => {
     assert.isEmpty(results);
   });
 
+  // ── delete ───────────────────────────────────────────────────────────────────
+
+  it('delete() removes a stored document; get() returns null after', async () => {
+    const repo = await makeRepo();
+    const hlc  = HLC.tick(HLC.zero(), 1000);
+    await repo.store('docs', 'del-key', { name: 'ToDelete' }, {}, hlc);
+
+    // Confirm it exists first
+    const before = await repo.get('docs', 'del-key');
+    assert.isNotNull(before);
+
+    await repo.delete('docs', 'del-key');
+
+    const after = await repo.get('docs', 'del-key');
+    assert.isNull(after);
+  });
+
 });

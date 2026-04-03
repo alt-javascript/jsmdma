@@ -134,6 +134,23 @@ export default class UserRepository {
   }
 
   /**
+   * Hard-delete a user, removing their user record and all provider index entries.
+   * Idempotent — no-op if user does not exist.
+   *
+   * @param {string} userId
+   * @returns {Promise<void>}
+   */
+  async deleteUser(userId) {
+    const user = await this._users().get(userId);
+    if (user == null) return; // idempotent
+    for (const p of user.providers) {
+      await this._providers().delete(`${p.provider}:${p.providerUserId}`);
+    }
+    await this._users().delete(userId);
+    this.logger?.info?.(`[UserRepository] deleteUser userId=${userId}`);
+  }
+
+  /**
    * Get a user by userId.
    * @param {string} userId
    * @returns {Promise<Object|null>}

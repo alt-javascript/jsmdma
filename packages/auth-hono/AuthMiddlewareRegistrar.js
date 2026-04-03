@@ -10,10 +10,12 @@
  *
  * Protected paths:
  *   /auth/me            — GET current user identity
- *   /:application/sync  — POST sync endpoint (M003)
+ *   /:application/sync   — POST sync endpoint (M003)
+ *   /:application/search — POST search endpoint (M008)
  *   /orgs               — POST create org, GET list orgs (M004)
  *   /orgs/*             — all org member management routes (M004)
  *   /docIndex/*         — all DocIndexController routes (M007)
+ *   /account/*          — all account export routes (M008)
  *
  * CDI autowires:
  *   this.jwtSecret — JWT secret string
@@ -39,10 +41,12 @@ export default class AuthMiddlewareRegistrar {
     app.use('/auth/me',           mw);
     app.use('/auth/link/*',       mw);
     app.use('/auth/providers/*',  mw);
-    app.use('/:application/sync', mw);
-    app.use('/orgs',              mw);
-    app.use('/orgs/*',            mw);
-    app.use('/docIndex/*',        mw);
-    this.logger?.debug?.('[AuthMiddlewareRegistrar] JWT middleware applied to /auth/me, /auth/link/*, /auth/providers/*, /:application/sync, /orgs, /orgs/*, /docIndex/*');
+    app.use('/:application/sync',   mw);
+    app.use('/:application/search', mw);
+    app.use('/orgs',                mw);
+    app.use('/orgs/*',              mw);
+    app.use('/docIndex/*',          mw);
+    app.use('/account/*',           mw);
+    this.logger?.debug?.('[AuthMiddlewareRegistrar] JWT middleware applied to /auth/me, /auth/link/*, /auth/providers/*, /:application/sync, /:application/search, /orgs, /orgs/*, /docIndex/*, /account/*');
   }
 }

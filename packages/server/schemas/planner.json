@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Planner",
+  "description": "Year planner document for year-planner application",
+  "type": "object",
+  "required": ["meta"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["name", "year"],
+      "properties": {
+        "name":    { "type": "string", "minLength": 1, "maxLength": 64 },
+        "year":    { "type": "integer", "minimum": 1900, "maximum": 2100 },
+        "lang":    { "type": "string", "maxLength": 10 },
+        "theme":   { "type": "string", "enum": ["ink", "nordic"] },
+        "dark":    { "type": "boolean" },
+        "created": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "days": {
+      "type": "object",
+      "description": "Sparse map of ISO date string to day entry",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "tp":    { "type": "integer", "minimum": 0, "maximum": 9 },
+          "tl":    { "type": "string", "maxLength": 32 },
+          "col":   { "type": "integer", "minimum": 0, "maximum": 8 },
+          "notes": { "type": "string", "maxLength": 4096 },
+          "emoji": { "type": "string", "maxLength": 8 }
+        },
+        "additionalProperties": false
+      },
+      "propertyNames": {
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+      }
+    }
+  },
+  "additionalProperties": false
+}

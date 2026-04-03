@@ -13,6 +13,8 @@ This document is the canonical entity model reference for **data-api**. It cover
 5. [Entity Shapes](#5-entity-shapes)
 6. [Storage Key Reference](#6-storage-key-reference)
 7. [Sharing Model](#7-sharing-model)
+8. [Data Export](#8-data-export)
+9. [Account & Org Deletion](#9-account--org-deletion)
 
 ---
 
@@ -312,18 +314,20 @@ return `${encode(userId)}:${encode(application)}:${encode(collection)}`;
 
 ## 7. Sharing Model
 
-The sharing model controls which users can read a document via the `changesSince` endpoint. The `visibility` field on `DocIndex` determines access.
+The sharing model controls which users can read a document via `changesSince` and `POST /:application/search`. The `visibility` field on `DocIndex` determines access.
 
-> **Implementation status:** DocIndex upsert, visibility, sharedWith, and shareToken minting are implemented in M007/S03 (write side). Read-side ACL enforcement (filtering `changesSince` results by visibility) is implemented in M008.
+> **Implementation status:** DocIndex upsert, visibility, sharedWith, and shareToken minting were implemented in M007/S03 (write side). Read-side ACL enforcement is fully implemented in M008: `changesSince` aggregates cross-namespace shared/public docs via a server-side docIndex fan-out, and `POST /:application/search` enforces the same ACL gate.
 
 ### Visibility Levels
 
-| Value | Who can read | Notes |
-|---|---|---|
-| `private` | Owner only | Default. `sharedWith` entries are not consulted. |
-| `shared` | Owner + every `{userId, app}` pair in `sharedWith` | Per-app scoped. Sharing a `year-planner` doc does **not** grant access to the user's `todo` items. |
-| `org` | All members of the document owner's org, for the same app | Requires `X-Org-Id` header. Org membership is checked via `OrgRepository`. |
-| `public` | Anyone presenting the share token | No authentication required. Token passed as `?token=<uuid>` query param or `X-Share-Token` header. |
+| Value | Who can read via `changesSince` | Appears in search results | Notes |
+|---|---|---|---|
+| `private` | Owner only | Owner only | Default. `sharedWith` entries are not consulted. |
+| `shared` | Owner + every `{userId, app}` pair in `sharedWith` | Owner + sharedWith users | Per-app scoped. Sharing a `year-planner` doc does **not** grant access to the user's `todo` items. |
+| `org` | All members of the document owner's org, for the same app | Org members | Requires `X-Org-Id` header. Org membership is checked via `OrgRepository`. |
+| `public` | Any authenticated user | Any authenticated user | Explicit opt-in to discoverability. |
+
+> **`public` vs share token:** `visibility: 'public'` is an explicit opt-in that makes a document discoverable in open search results for any authenticated user. A share token alone (`visibility` is not `'public'`) grants direct-link access only — such documents **do not** appear in search results. The two mechanisms have different intent and are enforced separately. See D013.
 
 ### `sharedWith` Shape
 
@@ -340,16 +344,117 @@ Sharing is additive — adding a user to `sharedWith` for `year-planner` does no
 
 ### Share Token
 
-`shareToken` is a UUID stored on `DocIndex`. It is minted by the server on request and stored as `docIndex.shareToken`. A `null` value means public sharing is not enabled for that document.
+`shareToken` is a UUID stored on `DocIndex`. It is minted by the server on request and stored as `docIndex.shareToken`. A `null` value means share-token access is not enabled for that document.
 
 **Upgrade path:** A future improvement is a deterministic JWT (`sign({ docKey, app, userId }, instanceSecret)`) that requires no storage, is stable for the document lifetime, and can be verified without a database lookup.
 
 ### Summary Flow
 
 ```
-GET /sync/changes?since=<hlc>&token=<uuid>   ← public share token (no auth)
-X-Share-Token: <uuid>                         ← alternative header form
+Authorization: Bearer <jwt>   ← required for all ACL-gated endpoints (private / shared / org / public)
+X-Org-Id: <orgId>             ← required for org visibility
+```
 
-Authorization: Bearer <jwt>                   ← private / shared / org
-X-Org-Id: <orgId>                             ← required for org visibility
+---
+
+## 8. Data Export
+
+Full data export is available via two endpoints. Exports are synchronous single-request downloads. Documents are grouped by application name, then collection name, mirroring the storage namespace structure.
+
+### User Export — `GET /account/export`
+
+Requires JWT authentication. Returns all data for the authenticated user.
+
+**Envelope shape:**
+```json
+{
+  "user": { "userId": "uuid", "email": "...", "providers": [...] },
+  "docs": {
+    "year-planner": {
+      "planners": [{ "_key": "planner-2026", ... }]
+    },
+    "todo": {
+      "tasks": [{ "_key": "task-1", ... }]
+    }
+  },
+  "docIndex": [
+    {
+      "docKey": "planner-2026",
+      "userId": "uuid",
+      "app": "year-planner",
+      "collection": "planners",
+      "visibility": "shared",
+      ...
+    }
+  ]
+}
+```
+
+**Collection discovery:** Personal export derives the collection list from `docIndex.listByUser()` — only collections the user has actually written to are included. Empty apps and collections are pruned from the envelope.
+
+Returns `404` if the user record does not exist (e.g. after deletion).
+
+### Org Export — `GET /orgs/:orgId/export`
+
+Requires JWT authentication + **org-admin** role. Returns all data for the organisation.
+
+**Envelope shape:**
+```json
+{
+  "org": { "orgId": "uuid", "name": "Acme Corp", "createdBy": "uuid", "createdAt": "ISO8601" },
+  "members": [
+    { "orgId": "uuid", "userId": "uuid", "role": "org-admin", "joinedAt": "ISO8601" }
+  ],
+  "docs": {
+    "year-planner": {
+      "planners": [{ "_key": "org-planner-2026", ... }]
+    }
+  }
+}
+```
+
+**Collection discovery:** Org export enumerates collections from `ApplicationRegistry` config — all configured collections are checked, even if empty. Empty apps and collections are pruned from the envelope.
+
+Returns `403` if caller is not org-admin. Returns `404` if the org record does not exist.
+
+---
+
+## 9. Account & Org Deletion
+
+Hard delete is supported for both user accounts and organisations. All deletion is synchronous and **irreversible** — there is no tombstone, TTL, or async sweep. See D011.
+
+### User Deletion — `DELETE /account`
+
+Requires JWT authentication. Cascades through all personal data:
+
+1. For each configured app: fetch docIndex entries via `listByUser`, group by collection, delete all personal documents, delete all docIndex entries
+2. Remove all org membership records (from every org the user belongs to)
+3. Remove all OAuth provider index entries (`{provider}:{providerUserId}` keys)
+4. Delete the user identity record
+
+Returns `204` (no body) on success.
+
+### Org Deletion — `DELETE /orgs/:orgId`
+
+Requires JWT authentication + **org-admin** role. Cascades through all org data:
+
+1. For each configured app: enumerate collections from ApplicationRegistry, delete all org-scoped documents (`org:{orgId}:{app}:{collection}` namespace)
+2. Remove all org membership records
+3. Release the org name uniqueness reservation
+4. Delete the org identity record
+
+Returns `204` (no body) on success. Returns `403` if caller is not org-admin. Returns `404` if the org does not exist.
+
+### Recommended workflow before deletion
+
+```
+# User deletion
+GET  /account/export         → save archive
+DELETE /account              → 204
+GET  /account/export         → 404 (confirmed gone)
+
+# Org deletion
+GET  /orgs/:orgId/export     → save archive
+DELETE /orgs/:orgId          → 204
+GET  /orgs/:orgId/export     → 404 (confirmed gone)
 ```

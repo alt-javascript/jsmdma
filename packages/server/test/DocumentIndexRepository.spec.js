@@ -159,4 +159,127 @@ describe('DocumentIndexRepository', () => {
     assert.isEmpty(results);
   });
 
+  // ── delete ───────────────────────────────────────────────────────────────────
+
+  it('delete() removes a docIndex entry by compositeKey; get() returns null after', async () => {
+    const repo = await makeRepo();
+    await repo.upsertOwnership('user-del', 'todo', 'doc-del', 'tasks');
+
+    const entry = await repo.get('user-del', 'todo', 'doc-del');
+    assert.isNotNull(entry);
+    const compositeKey = entry._key;
+
+    await repo.delete(compositeKey);
+
+    const after = await repo.get('user-del', 'todo', 'doc-del');
+    assert.isNull(after);
+  });
+
+  // ── listAccessibleDocs ───────────────────────────────────────────────────────
+
+  describe('listAccessibleDocs', () => {
+
+    async function makeRepoWithDocs() {
+      const repo = await makeRepo();
+
+      // Alice owns three docs in 'planner'
+      await repo.upsertOwnership('alice', 'planner', 'alice-private',  'events');
+      await repo.upsertOwnership('alice', 'planner', 'alice-public',   'events');
+      await repo.upsertOwnership('alice', 'planner', 'alice-shared',   'events');
+      await repo.upsertOwnership('alice', 'planner', 'alice-org',      'events');
+
+      await repo.setVisibility('alice', 'planner', 'alice-public',  'public');
+      await repo.setVisibility('alice', 'planner', 'alice-shared',  'shared');
+      await repo.setVisibility('alice', 'planner', 'alice-org',     'org');
+
+      // alice-shared is shared with bob in the same 'planner' app
+      await repo.addSharedWith('alice', 'planner', 'alice-shared', 'bob', 'planner');
+
+      // Bob owns one private doc in 'planner'
+      await repo.upsertOwnership('bob', 'planner', 'bob-private', 'events');
+
+      // A doc in a completely different app — must never appear
+      await repo.upsertOwnership('alice', 'calendar', 'alice-cal-doc', 'events');
+      await repo.setVisibility('alice', 'calendar', 'alice-cal-doc', 'public');
+
+      return repo;
+    }
+
+    it('own docs are always included (private visibility)', async () => {
+      const repo = await makeRepoWithDocs();
+      const results = await repo.listAccessibleDocs('alice', 'planner');
+      const keys = results.map((d) => d.docKey);
+      assert.include(keys, 'alice-private', 'own private doc should be visible');
+    });
+
+    it('own docs are always included (all own visibility levels)', async () => {
+      const repo = await makeRepoWithDocs();
+      const results = await repo.listAccessibleDocs('alice', 'planner');
+      const keys = results.map((d) => d.docKey);
+      // Alice sees all four of her own docs
+      assert.include(keys, 'alice-private');
+      assert.include(keys, 'alice-public');
+      assert.include(keys, 'alice-shared');
+      assert.include(keys, 'alice-org');
+    });
+
+    it('public docs from other users are included', async () => {
+      const repo = await makeRepoWithDocs();
+      const results = await repo.listAccessibleDocs('bob', 'planner');
+      const keys = results.map((d) => d.docKey);
+      assert.include(keys, 'alice-public', 'public doc should be visible to bob');
+    });
+
+    it('shared doc with correct sharedWith entry is included', async () => {
+      const repo = await makeRepoWithDocs();
+      const results = await repo.listAccessibleDocs('bob', 'planner');
+      const keys = results.map((d) => d.docKey);
+      assert.include(keys, 'alice-shared', 'shared doc explicitly shared with bob should appear');
+    });
+
+    it('shared doc where requestor is NOT in sharedWith is excluded', async () => {
+      const repo = await makeRepoWithDocs();
+      // Carol is not in alice-shared's sharedWith list
+      const results = await repo.listAccessibleDocs('carol', 'planner');
+      const keys = results.map((d) => d.docKey);
+      assert.notInclude(keys, 'alice-shared', 'shared doc not shared with carol should be hidden');
+    });
+
+    it('private docs from other users are excluded', async () => {
+      const repo = await makeRepoWithDocs();
+      const results = await repo.listAccessibleDocs('bob', 'planner');
+      const keys = results.map((d) => d.docKey);
+      assert.notInclude(keys, 'alice-private', 'alice private doc must not appear for bob');
+    });
+
+    it('org-visibility docs are excluded when orgIds=[] (cross-namespace deferred)', async () => {
+      const repo = await makeRepoWithDocs();
+      const results = await repo.listAccessibleDocs('bob', 'planner', []);
+      const keys = results.map((d) => d.docKey);
+      assert.notInclude(keys, 'alice-org', 'org doc must not appear when orgIds is empty');
+    });
+
+    it('docs from a different app are never included', async () => {
+      const repo = await makeRepoWithDocs();
+      const results = await repo.listAccessibleDocs('bob', 'planner');
+      const keys = results.map((d) => d.docKey);
+      assert.notInclude(keys, 'alice-cal-doc', 'cross-app public doc must not bleed through');
+    });
+
+    it('returns an empty array when no docs exist for the app', async () => {
+      const repo = await makeRepo();
+      const results = await repo.listAccessibleDocs('alice', 'nonexistent-app');
+      assert.isArray(results);
+      assert.isEmpty(results);
+    });
+
+    it('bob sees exactly his own doc plus alice-public and alice-shared', async () => {
+      const repo = await makeRepoWithDocs();
+      const results = await repo.listAccessibleDocs('bob', 'planner');
+      const keys = results.map((d) => d.docKey).sort();
+      assert.deepEqual(keys, ['alice-public', 'alice-shared', 'bob-private'].sort());
+    });
+
+  });
+
 });

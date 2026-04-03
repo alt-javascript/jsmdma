@@ -21,8 +21,8 @@ import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
 import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
-import { SyncRepository, SyncService, ApplicationRegistry, SchemaValidator, DocumentIndexRepository } from '@alt-javascript/data-api-server';
-import { AppSyncController, DocIndexController } from '@alt-javascript/data-api-hono';
+import { SyncRepository, SyncService, SearchService, ApplicationRegistry, SchemaValidator, DocumentIndexRepository, ExportService, DeletionService } from '@alt-javascript/data-api-server';
+import { AppSyncController, DocIndexController, SearchController, ExportController, DeletionController } from '@alt-javascript/data-api-hono';
 import { AuthMiddlewareRegistrar, OrgController } from '@alt-javascript/data-api-auth-hono';
 import {
   UserRepository, OrgRepository, OrgService,
@@ -77,7 +77,12 @@ const APPLICATIONS_CONFIG = {
     description: 'Shopping lists (free-form, no schema)',
   },
   'year-planner': {
-    description: 'Year planner (free-form documents)',
+    description: 'Year planner application',
+    collections: {
+      planners: {
+        schemaPath: './packages/server/schemas/planner.json',
+      },
+    },
   },
 };
 
@@ -96,6 +101,7 @@ async function buildApp() {
     ...jsnosqlcAutoConfiguration(),
     { Reference: SyncRepository,     name: 'syncRepository',     scope: 'singleton' },
     { Reference: SyncService,        name: 'syncService',        scope: 'singleton' },
+    { Reference: SearchService,      name: 'searchService',      scope: 'singleton' },
     { Reference: ApplicationRegistry, name: 'applicationRegistry', scope: 'singleton',
       properties: [{ name: 'applications', path: 'applications' }] },
     { Reference: SchemaValidator,    name: 'schemaValidator',    scope: 'singleton',
@@ -103,6 +109,8 @@ async function buildApp() {
     { Reference: UserRepository,     name: 'userRepository',     scope: 'singleton' },
     { Reference: OrgRepository,      name: 'orgRepository',      scope: 'singleton' },
     { Reference: OrgService,         name: 'orgService',         scope: 'singleton' },
+    { Reference: ExportService,      name: 'exportService',      scope: 'singleton' },
+    { Reference: DeletionService,    name: 'deletionService',    scope: 'singleton' },
     { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
       properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
     { Reference: DocumentIndexRepository, name: 'documentIndexRepository', scope: 'singleton' },
@@ -110,6 +118,9 @@ async function buildApp() {
     { Reference: OrgController,      name: 'orgController',      scope: 'singleton',
       properties: [{ name: 'registerable', path: 'orgs.registerable' }] },
     { Reference: DocIndexController, name: 'docIndexController', scope: 'singleton' },
+    { Reference: SearchController,   name: 'searchController',   scope: 'singleton' },
+    { Reference: ExportController,   name: 'exportController',   scope: 'singleton' },
+    { Reference: DeletionController, name: 'deletionController', scope: 'singleton' },
   ]);
 
   const appCtx = new ApplicationContext({ contexts: [context], config });
@@ -187,6 +198,36 @@ async function docIndexGet(app, application, docKey, token) {
     headers: { Authorization: `Bearer ${token}` },
   });
   return { status: res.status, body: await res.json() };
+}
+
+async function searchPost(app, application, body, token) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  return app.request(`/${application}/search`, {
+    method:  'POST',
+    body:    JSON.stringify(body),
+    headers,
+  }).then(async (res) => ({ status: res.status, body: await res.json() }));
+}
+
+async function exportGet(app, path, token) {
+  const res = await app.request(path, {
+    method:  'GET',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = await res.json();
+  return { status: res.status, body };
+}
+
+async function deleteReq(app, path, token) {
+  const res = await app.request(path, {
+    method:  'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  let body = null;
+  const text = await res.text();
+  if (text) { try { body = JSON.parse(text); } catch {} }
+  return { status: res.status, body };
 }
 
 // ── main ──────────────────────────────────────────────────────────────────────
@@ -451,6 +492,128 @@ async function main() {
   assert(r7d.body.serverChanges.length === 0, `Personal namespace should be empty for fresh collection, saw ${r7d.body.serverChanges.length} docs`);
   ok('Org namespace isolated from Alice\'s personal namespace');
 
+  // ── Scenario 8: year-planner — valid planner doc → 200 ───────────────────
+
+  banner('Scenario 8: year-planner — valid planner doc → 200');
+
+  const t8 = HLC.tick(HLC.zero(), Date.now());
+
+  const r8 = await syncPost(app, 'year-planner', {
+    collection:  'planners',
+    clientClock: HLC.zero(),
+    changes: [{
+      key:       'planner-2026',
+      doc:       {
+        meta: { name: 'Work 2026', year: 2026, lang: 'en', theme: 'ink', dark: false },
+        days: {
+          '2026-03-28': { tp: 3, tl: 'Sprint', col: 2, notes: 'Stand-up at 9am' },
+        },
+      },
+      fieldRevs: { meta: t8, days: t8 },
+      baseClock: HLC.zero(),
+    }],
+  }, aliceToken);
+
+  assert(r8.status === 200, `Expected 200, got ${r8.status}: ${JSON.stringify(r8.body)}`);
+  assert(Array.isArray(r8.body.serverChanges), 'serverChanges should be an array');
+  ok('year-planner: valid planner doc syncs cleanly');
+
+  // ── Scenario 9: year-planner — invalid planner (missing meta.name) → 400 ──
+
+  banner('Scenario 9: year-planner — invalid planner (missing meta.name) → 400');
+
+  const t9 = HLC.tick(t8, Date.now());
+
+  const r9 = await syncPost(app, 'year-planner', {
+    collection:  'planners',
+    clientClock: HLC.zero(),
+    changes: [{
+      key:       'bad-planner',
+      doc:       { meta: { year: 2026 } },  // missing required 'name'
+      fieldRevs: { meta: t9 },
+      baseClock: HLC.zero(),
+    }],
+  }, aliceToken);
+
+  assert(r9.status === 400, `Expected 400, got ${r9.status}`);
+  assert(r9.body.error === 'Schema validation failed', `Unexpected error: ${r9.body.error}`);
+  assert(Array.isArray(r9.body.details), 'Details should be an array');
+  const missingNameError = r9.body.details.find((d) => d.field.includes('name') || d.field.includes('meta'));
+  assert(missingNameError, `Should have an error about missing name; got: ${JSON.stringify(r9.body.details)}`);
+  ok('year-planner: invalid planner (missing meta.name) → 400');
+  console.log(`  details: ${JSON.stringify(r9.body.details)}`);
+
+  // ── Scenario 10: year-planner — two devices edit different days → zero conflicts
+
+  banner('Scenario 10: year-planner — two devices edit different days → zero conflicts');
+
+  // Seed: Alice syncs a planner (scenario 8 already stored it)
+  const seededClock = r8.body.serverClock;
+
+  await new Promise((r) => setTimeout(r, 2));
+  const t10a = HLC.tick(HLC.tick(t9, Date.now()), Date.now());
+  await new Promise((r) => setTimeout(r, 2));
+  const t10b = HLC.tick(t10a, Date.now());
+
+  // Device A (offline): edits meta.name
+  const r10a = await syncPost(app, 'year-planner', {
+    collection:  'planners',
+    clientClock: seededClock,
+    changes: [{
+      key:       'planner-2026',
+      doc:       {
+        meta: { name: 'Work 2026 Revised', year: 2026, lang: 'en', theme: 'ink', dark: false },
+        days: {
+          '2026-03-28': { tp: 3, tl: 'Sprint', col: 2, notes: 'Stand-up at 9am' },
+        },
+      },
+      fieldRevs: { meta: t10a, days: t8 },
+      baseClock: seededClock,
+    }],
+  }, aliceToken);
+
+  assert(r10a.status === 200, `Device A expected 200, got ${r10a.status}: ${JSON.stringify(r10a.body)}`);
+  assert(r10a.body.conflicts.length === 0, `Device A: expected 0 conflicts, got ${r10a.body.conflicts.length}`);
+  ok('year-planner: Device A (meta.name edit) synced with 0 conflicts');
+
+  // Device B (offline, same baseClock): edits a different day entry
+  const r10b = await syncPost(app, 'year-planner', {
+    collection:  'planners',
+    clientClock: seededClock,
+    changes: [{
+      key:       'planner-2026',
+      doc:       {
+        meta: { name: 'Work 2026', year: 2026, lang: 'en', theme: 'ink', dark: false },
+        days: {
+          '2026-03-28': { tp: 3, tl: 'Sprint', col: 2, notes: 'Stand-up at 9am' },
+          '2026-04-01': { tp: 1, tl: 'Holiday', col: 0 },
+        },
+      },
+      fieldRevs: { meta: t8, days: t10b },
+      baseClock: seededClock,
+    }],
+  }, aliceToken);
+
+  assert(r10b.status === 200, `Device B expected 200, got ${r10b.status}: ${JSON.stringify(r10b.body)}`);
+  assert(r10b.body.conflicts.length === 0, `Device B: expected 0 conflicts, got ${r10b.body.conflicts.length}: ${JSON.stringify(r10b.body.conflicts)}`);
+  ok('year-planner: Device B (new day added) synced with 0 conflicts');
+
+  // Pull final state and verify both edits are present
+  const r10pull = await syncPost(app, 'year-planner', {
+    collection:  'planners',
+    clientClock: HLC.zero(),
+    changes:     [],
+  }, aliceToken);
+
+  assert(r10pull.status === 200, `Pull expected 200, got ${r10pull.status}`);
+  assert(r10pull.body.serverChanges.length === 1, `Expected 1 planner, got ${r10pull.body.serverChanges.length}`);
+  const merged = r10pull.body.serverChanges[0];
+  assert(merged.meta.name === 'Work 2026 Revised', `Expected Device A's meta.name edit; got: ${merged.meta?.name}`);
+  assert(merged.days['2026-04-01'] != null, `Expected Device B's new day entry; got: ${JSON.stringify(merged.days)}`);
+  ok('year-planner: two devices edit different days — zero conflicts');
+  ok(`  merged meta.name: ${merged.meta.name}`);
+  ok(`  merged days entries: ${Object.keys(merged.days).join(', ')}`);
+
   // ── Scenario 11: DocIndex — ownership tracking and share token ───────────
 
   banner('Scenario 11: DocIndex — ownership tracking and share token');
@@ -555,6 +718,234 @@ async function main() {
   // Tear down the no-reg app
   await appCtxNoReg.stop?.();
 
+  // ── Scenario 13: ACL delivery proof — Bob receives Alice's shared doc ─────
+
+  banner('Scenario 13: ACL delivery proof — Bob receives Alice\'s shared year-planner doc');
+
+  // Alice syncs a second doc ('planner-private') — stays private by default
+  const t13 = HLC.tick(HLC.zero(), Date.now());
+
+  const r13private = await syncPost(app, 'year-planner', {
+    collection:  'planners',
+    clientClock: HLC.zero(),
+    changes: [{
+      key:       'planner-private',
+      doc:       { meta: { name: 'Private Plan', year: 2026, lang: 'en', theme: 'ink', dark: false } },
+      fieldRevs: { meta: t13 },
+      baseClock: HLC.zero(),
+    }],
+  }, aliceToken);
+
+  assert(r13private.status === 200, `Expected 200 for planner-private sync, got ${r13private.status}`);
+  ok('Alice synced planner-private (visibility=private by default)');
+
+  // Grant Bob access to planner-2026 (visibility already 'shared' from Scenario 11 PATCH;
+  // just add Bob to the sharedWith list)
+  const docIndexRepo = appCtx.get('documentIndexRepository');
+  await docIndexRepo.addSharedWith('alice-uuid', 'year-planner', 'planner-2026', 'bob-uuid', 'year-planner');
+  ok('Alice shared planner-2026 with Bob via addSharedWith');
+
+  // Bob syncs year-planner/planners (personal token — no x-org-id)
+  const r13bob = await syncPost(app, 'year-planner', {
+    collection:  'planners',
+    clientClock: HLC.zero(),
+    changes:     [],
+  }, bobToken);
+
+  assert(r13bob.status === 200, `Expected 200 for Bob sync, got ${r13bob.status}: ${JSON.stringify(r13bob.body)}`);
+
+  const bobDocs = r13bob.body.serverChanges;
+  const bobHasShared  = bobDocs.some((d) => d._key === 'planner-2026');
+  const bobHasPrivate = bobDocs.some((d) => d._key === 'planner-private');
+
+  assert(bobHasShared,  `Bob should see Alice's shared planner-2026; got keys: ${bobDocs.map((d) => d._key).join(', ')}`);
+  assert(!bobHasPrivate, `Bob should NOT see Alice's private planner-private; got keys: ${bobDocs.map((d) => d._key).join(', ')}`);
+  ok('Bob\'s sync returns Alice\'s shared planner-2026 ✓');
+  ok('Bob\'s sync does NOT return Alice\'s private planner-private ✓');
+
+  // Alice's own sync still works (not broken by ACL changes)
+  const r13alice = await syncPost(app, 'year-planner', {
+    collection:  'planners',
+    clientClock: HLC.zero(),
+    changes:     [],
+  }, aliceToken);
+
+  assert(r13alice.status === 200, `Expected 200 for Alice sync, got ${r13alice.status}`);
+  const aliceDocs = r13alice.body.serverChanges;
+  const aliceHasPlanner2026 = aliceDocs.some((d) => d._key === 'planner-2026');
+  const aliceHasPrivate     = aliceDocs.some((d) => d._key === 'planner-private');
+  assert(aliceHasPlanner2026, `Alice should still see her own planner-2026`);
+  assert(aliceHasPrivate,     `Alice should still see her own planner-private`);
+  ok('Alice\'s own sync unaffected — sees both her own docs ✓');
+
+  // ── Scenario 14: Search endpoint with ACL scoping ────────────────────────
+
+  banner('Scenario 14: Search endpoint with ACL scoping');
+
+  // Alice pushes a new private doc so it exists in storage
+  const t14 = HLC.tick(HLC.zero(), Date.now());
+
+  const r14private = await syncPost(app, 'year-planner', {
+    collection:  'planners',
+    clientClock: HLC.zero(),
+    changes: [{
+      key:       'planner-private-search',
+      doc:       { meta: { name: 'Private Search Planner', year: 2026, lang: 'en', theme: 'ink', dark: false } },
+      fieldRevs: { meta: t14 },
+      baseClock: HLC.zero(),
+    }],
+  }, aliceToken);
+
+  assert(r14private.status === 200, `Expected 200 for planner-private-search sync, got ${r14private.status}`);
+  ok('Alice synced planner-private-search (visibility=private by default)');
+
+  // Update planner-2026's name to contain 'Plan' so the filter hits it (demonstrating ACL gating)
+  const t14update = HLC.tick(t14, Date.now());
+  const r14update = await syncPost(app, 'year-planner', {
+    collection:  'planners',
+    clientClock: HLC.zero(),
+    changes: [{
+      key:       'planner-2026',
+      doc:       { meta: { name: 'Year Plan 2026', year: 2026, lang: 'en', theme: 'ink', dark: false } },
+      fieldRevs: { meta: t14update },
+      baseClock: HLC.zero(),
+    }],
+  }, aliceToken);
+
+  assert(r14update.status === 200, `Expected 200 for planner-2026 update, got ${r14update.status}`);
+  ok("Alice updated planner-2026 meta.name to 'Year Plan 2026'");
+
+  // Set planner-2026 to public so Bob can find it without sharedWith
+  await docIndexRepo.setVisibility('alice-uuid', 'year-planner', 'planner-2026', 'public');
+  ok('Alice set planner-2026 visibility to public');
+
+  // Bob searches for docs with 'Plan' in meta.name — filter hits planner-2026, planner-private,
+  // and planner-private-search in Alice's namespace; only planner-2026 (public) passes ACL
+  const r14search = await searchPost(app, 'year-planner', {
+    collection: 'planners',
+    filter: { type: 'condition', field: 'meta.name', op: 'contains', value: 'Plan' },
+  }, bobToken);
+
+  assert(r14search.status === 200, `Expected 200 for search, got ${r14search.status}: ${JSON.stringify(r14search.body)}`);
+  assert(Array.isArray(r14search.body.results), `Expected results array, got: ${JSON.stringify(r14search.body)}`);
+
+  const results = r14search.body.results;
+  const hasPublicPlanner  = results.some((d) => d._key === 'planner-2026');
+  const hasPrivatePlanner = results.some((d) => d._key === 'planner-private-search');
+
+  assert(hasPublicPlanner,   `Bob should see Alice's public planner-2026; got keys: ${results.map((d) => d._key).join(', ')}`);
+  assert(!hasPrivatePlanner, `Bob should NOT see Alice's private planner-private-search; got keys: ${results.map((d) => d._key).join(', ')}`);
+  ok("Bob's search returns Alice's public planner-2026 ✓");
+  ok("Bob's search does NOT return Alice's private planner-private-search ✓");
+
+  // ── Scenario 15: Alice personal export ──────────────────────────────────
+
+  banner('Scenario 15: Alice personal export — GET /account/export');
+
+  const r15 = await exportGet(app, '/account/export', aliceToken);
+  assert(r15.status === 200, `Expected 200 from GET /account/export, got ${r15.status}: ${JSON.stringify(r15.body)}`);
+  assert(r15.body.user && r15.body.user.userId === 'alice-uuid', `Expected user.userId='alice-uuid', got: ${JSON.stringify(r15.body.user)}`);
+  assert(Array.isArray(r15.body.docIndex) && r15.body.docIndex.length > 0, `Expected non-empty docIndex array, got: ${JSON.stringify(r15.body.docIndex)}`);
+  assert(r15.body.docs['year-planner'] != null, `Expected docs['year-planner'] to exist, got: ${JSON.stringify(Object.keys(r15.body.docs))}`);
+  assert(Array.isArray(r15.body.docs['year-planner']['planners']), `Expected docs['year-planner']['planners'] to be an array, got: ${JSON.stringify(r15.body.docs['year-planner'])}`);
+  const plannerKeys = r15.body.docs['year-planner']['planners'].map((d) => d._key);
+  assert(plannerKeys.includes('planner-2026'), `Expected planner-2026 in planners; got keys: ${plannerKeys.join(', ')}`);
+  ok(`GET /account/export → 200 (user=${r15.body.user.userId}, docIndex.length=${r15.body.docIndex.length})`);
+  ok(`  year-planner/planners keys: ${plannerKeys.join(', ')}`);
+
+  // ── Scenario 16: Org export — Carol as org-admin, Bob 403 guard ──────────
+
+  banner('Scenario 16: Org export — Carol as org-admin + Bob 403 guard');
+
+  // Create Carol in the user store (she's not seeded from earlier scenarios)
+  const userRepo16 = appCtx.get('userRepository');
+  await userRepo16._users().store('carol-export-uuid', {
+    userId:    'carol-export-uuid',
+    email:     'carol-export@example.com',
+    providers: ['demo'],
+  });
+  const carolExportToken = await JwtSession.sign({ sub: 'carol-export-uuid', providers: ['demo'] }, JWT_SECRET);
+
+  // Carol creates an org (auto-added as org-admin)
+  const orgSvc16 = appCtx.get('orgService');
+  const orgResult16 = await orgSvc16.createOrg('carol-export-uuid', 'Export Test Org');
+  const exportOrgId = orgResult16.org.orgId;
+  ok(`Carol created org 'Export Test Org' (orgId: ${exportOrgId.slice(0, 8)}...)`);
+
+  // Seed a doc to the org namespace via HTTP
+  const r16seed = await syncPost(app, 'year-planner', {
+    collection:  'planners',
+    clientClock: HLC.zero(),
+    changes: [{
+      key:       'org-planner-1',
+      doc:       { meta: { name: 'Org Plan', year: 2026, lang: 'en', theme: 'ink', dark: false } },
+      fieldRevs: { meta: HLC.tick(HLC.zero(), Date.now()) },
+      baseClock: HLC.zero(),
+    }],
+  }, carolExportToken, exportOrgId);
+  assert(r16seed.status === 200, `Expected 200 for org-planner-1 seed, got ${r16seed.status}: ${JSON.stringify(r16seed.body)}`);
+  ok('Carol seeded org-planner-1 doc to org namespace');
+
+  // Carol (org-admin) exports → 200
+  const r16 = await exportGet(app, `/orgs/${exportOrgId}/export`, carolExportToken);
+  assert(r16.status === 200, `Expected 200 from org export, got ${r16.status}: ${JSON.stringify(r16.body)}`);
+  assert(r16.body.org.orgId === exportOrgId, `Expected org.orgId='${exportOrgId}', got: ${r16.body.org?.orgId}`);
+  assert(Array.isArray(r16.body.members), `Expected members array, got: ${JSON.stringify(r16.body.members)}`);
+  assert(
+    r16.body.members.some((m) => m.userId === 'carol-export-uuid' && m.role === 'org-admin'),
+    `Expected carol-export-uuid as org-admin in members; got: ${JSON.stringify(r16.body.members)}`,
+  );
+  assert(r16.body.docs['year-planner'] != null, `Expected docs['year-planner'] to exist in org export`);
+  assert(Array.isArray(r16.body.docs['year-planner']['planners']), `Expected docs['year-planner']['planners'] to be an array`);
+  const orgPlannerKeys = r16.body.docs['year-planner']['planners'].map((d) => d._key);
+  assert(orgPlannerKeys.includes('org-planner-1'), `Expected org-planner-1 in org planners; got: ${orgPlannerKeys.join(', ')}`);
+  ok(`GET /orgs/${exportOrgId.slice(0, 8)}.../export → 200 (org=${r16.body.org.orgId.slice(0, 8)}..., members=${r16.body.members.length})`);
+  ok(`  org year-planner/planners keys: ${orgPlannerKeys.join(', ')}`);
+
+  // Bob (not an org member) → 403
+  const r16bob = await exportGet(app, `/orgs/${exportOrgId}/export`, bobToken);
+  assert(r16bob.status === 403, `Expected 403 for Bob on org export, got ${r16bob.status}: ${JSON.stringify(r16bob.body)}`);
+  ok('Bob (non-admin) GET /orgs/.../export → 403 ✓');
+
+  // ── Scenario 17: Delete Alice, confirm export → 404 ──────────────────────
+
+  banner('Scenario 17: Delete Alice — DELETE /account → 204, then GET /account/export → 404');
+
+  // Pre-deletion: confirm Alice's export is still 200
+  const r17pre = await exportGet(app, '/account/export', aliceToken);
+  assert(r17pre.status === 200, `Scenario 17 pre-check: expected 200, got ${r17pre.status}: ${JSON.stringify(r17pre.body)}`);
+  assert(r17pre.body.user && r17pre.body.user.userId === 'alice-uuid', `Expected alice-uuid user in pre-check`);
+  ok('Pre-deletion GET /account/export → 200 ✓');
+
+  // Delete Alice
+  const r17del = await deleteReq(app, '/account', aliceToken);
+  assert(r17del.status === 204, `Expected 204 from DELETE /account, got ${r17del.status}: ${JSON.stringify(r17del.body)}`);
+  ok('DELETE /account → 204 (Alice deleted) ✓');
+
+  // Post-deletion: export must return 404
+  const r17post = await exportGet(app, '/account/export', aliceToken);
+  assert(r17post.status === 404, `Expected 404 from GET /account/export after deletion, got ${r17post.status}: ${JSON.stringify(r17post.body)}`);
+  ok('Post-deletion GET /account/export → 404 ✓');
+
+  // ── Scenario 18: Delete Carol's org, confirm org export → 404 ────────────
+
+  banner('Scenario 18: Delete org — DELETE /orgs/:orgId → 204, then GET /orgs/:orgId/export → 404');
+
+  // Pre-deletion: confirm org export is still 200
+  const r18pre = await exportGet(app, `/orgs/${exportOrgId}/export`, carolExportToken);
+  assert(r18pre.status === 200, `Scenario 18 pre-check: expected 200, got ${r18pre.status}: ${JSON.stringify(r18pre.body)}`);
+  ok('Pre-deletion GET /orgs/.../export → 200 ✓');
+
+  // Delete the org (Carol is org-admin)
+  const r18del = await deleteReq(app, `/orgs/${exportOrgId}`, carolExportToken);
+  assert(r18del.status === 204, `Expected 204 from DELETE /orgs/${exportOrgId}, got ${r18del.status}: ${JSON.stringify(r18del.body)}`);
+  ok(`DELETE /orgs/${exportOrgId.slice(0, 8)}... → 204 (org deleted) ✓`);
+
+  // Post-deletion: org export must return 404
+  const r18post = await exportGet(app, `/orgs/${exportOrgId}/export`, carolExportToken);
+  assert(r18post.status === 404, `Expected 404 from org export after deletion, got ${r18post.status}: ${JSON.stringify(r18post.body)}`);
+  ok('Post-deletion GET /orgs/.../export → 404 ✓');
+
   // ── Summary ───────────────────────────────────────────────────────────────
 
   banner('All scenarios passed');
@@ -569,6 +960,9 @@ async function main() {
   console.log('  ✓ Alice + Bob share documents via x-org-id header');
   console.log('  ✓ Carol (non-member) rejected with 403');
   console.log('  ✓ Org namespace isolated from personal namespace');
+  console.log('  ✓ year-planner: valid planner doc syncs cleanly');
+  console.log('  ✓ year-planner: invalid planner (missing meta.name) → 400');
+  console.log('  ✓ year-planner: two devices edit different days — zero conflicts');
   console.log('  ✓ DocIndex ownership entry created on sync write');
   console.log('  ✓ DocIndex GET returns entry with correct userId and visibility');
   console.log('  ✓ DocIndex PATCH updates visibility to shared');
@@ -577,7 +971,16 @@ async function main() {
   console.log('  ✓ HTTP POST /orgs (registerable=true) → 201 with role=org-admin');
   console.log('  ✓ HTTP POST /orgs duplicate name → 409 DuplicateOrgNameError');
   console.log('  ✓ HTTP POST /orgs (registerable absent) → 403');
-  console.log('\n  Multi-app, multi-user, org-scoped sync + docIndex ownership tracking + HTTP org creation working correctly.\n');
+  console.log('  ✓ ACL delivery: Bob receives Alice\'s shared doc via personal sync fan-out');
+  console.log('  ✓ ACL delivery: Bob does NOT receive Alice\'s private doc');
+  console.log('  ✓ ACL delivery: Alice\'s own sync unaffected');
+  console.log('  ✓ Search: Bob\'s POST /year-planner/search returns Alice\'s public doc but not Alice\'s private doc');
+  console.log('  ✓ Personal export: GET /account/export returns user + docs + docIndex');
+  console.log('  ✓ Org export: GET /orgs/:orgId/export returns org + members + org-scoped docs');
+  console.log('  ✓ Org export: non-admin (Bob) rejected with 403');
+  console.log('  ✓ Account hard-delete: DELETE /account removes user + docs + docIndex; export → 404');
+  console.log('  ✓ Org hard-delete: DELETE /orgs/:orgId removes org + docs + members; export → 404');
+  console.log('\n  Multi-app, multi-user, org-scoped sync + docIndex ownership tracking + HTTP org creation + ACL delivery + search ACL scoping + full data export + hard deletion (user + org cascade) working correctly.\n');
 }
 
 main().catch((err) => {
