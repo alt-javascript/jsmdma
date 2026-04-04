@@ -366,4 +366,48 @@ describe('SyncService', () => {
     });
   });
 
+  // ── PRUNE-02: full-pull recovery after client clock reset ─────────────────────
+
+  describe('prune and full-pull recovery (PRUNE-02)', () => {
+    it('client that resets to HLC.zero() after prune receives all stored docs on next sync', async () => {
+      const { svc } = await buildService();
+      const t1 = HLC.tick(HLC.zero(), Date.now());
+
+      // Step 1: initial sync — push two documents to the server
+      const r1 = await svc.sync('notes', HLC.zero(), [
+        {
+          key: 'doc-A',
+          doc: { text: 'Alpha content' },
+          fieldRevs: { text: t1 },
+          baseClock: HLC.zero(),
+        },
+        {
+          key: 'doc-B',
+          doc: { text: 'Beta content' },
+          fieldRevs: { text: t1 },
+          baseClock: HLC.zero(),
+        },
+      ], 'prune-user', 'prune-app');
+
+      // Sanity: serverClock returned is non-zero (client would advance its clock to here)
+      assert.isString(r1.serverClock);
+      assert.notEqual(r1.serverClock, HLC.zero(),
+        'serverClock must be non-zero after first sync');
+
+      // Step 2: client simulates a prune by discarding all local data and
+      // resetting its clock back to HLC.zero()
+      const clientClockAfterPrune = HLC.zero();
+
+      // Step 3: re-sync with the reset clock — server must return all docs
+      const r2 = await svc.sync('notes', clientClockAfterPrune, [], 'prune-user', 'prune-app');
+
+      assert.lengthOf(r2.serverChanges, 2,
+        'after prune+reset to HLC.zero(), client must receive full pull of all 2 stored docs');
+
+      const texts = r2.serverChanges.map((d) => d.text);
+      assert.include(texts, 'Alpha content', 'doc-A must be present in full pull');
+      assert.include(texts, 'Beta content', 'doc-B must be present in full pull');
+    });
+  });
+
 });

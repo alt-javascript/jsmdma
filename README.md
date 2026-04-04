@@ -28,6 +28,21 @@ packages/
 
 ---
 
+## Documentation
+
+- **[Client Integration Guide](docs/client-integration.md)** — step-by-step guide to building offline-first clients using SyncClient
+- **[Sync Protocol Reference](docs/sync-protocol.md)** — wire-level detail of the POST /:app/sync request/response contract
+- **[Sharing & Visibility](docs/sharing.md)** — per-document visibility flags, shareToken-based public access, and ACL fan-out
+- **[Search](docs/search.md)** — filter-based full-text and structured search across accessible documents
+- **[Export](docs/export.md)** — bulk export of personal or org-scoped data in JSON and CSV formats
+- **[Deletion](docs/deletion.md)** — hard-delete protocol, tombstoning, and purge semantics
+- **[Data Model](docs/data-model.md)** — document structure, DocIndex schema, storage namespace layout, and relationship design
+- **[OpenAPI Spec](docs/openapi.yaml)** — machine-readable API description (OpenAPI 3.1.0) covering all endpoints
+- **[Year Planner Integration](docs/year-planner-integration.md)** — worked example integrating the API with a calendar/planner front-end
+- **[Architecture Decision Records](docs/decisions/)** — ADR-001 through ADR-019 capturing key design choices
+
+---
+
 ## Sync Protocol
 
 ### POST /:application/sync
@@ -493,4 +508,8 @@ Expected output includes:
 | M002 | ✅ Complete | OAuth identity: Google, Microsoft, Apple, GitHub → UUID |
 | M003 | ✅ Complete | Application-scoped sync, text auto-merge, JSON Schema validation |
 | M004 | ✅ Complete | Organisation tenancy — app-agnostic orgs, membership, role management, X-Org-Id header sync |
-| M005 | Planned | Cloud hosting evaluation and deployment adapter |
+| M005 | ✅ Complete | Deep nested document support — dot-path fieldRevs and recursive field-level merge |
+| M006 | ✅ Complete | Planner schema, application config, and isomorphic ESM bundle |
+| M007 | ✅ Complete | Data model, DocIndex, sharing design, OpenAPI spec, and integration guide authoring |
+| M008 | ✅ Complete | ACL enforcement, search, export, and hard deletion |
+| M009 | ✅ Complete | SyncClient (isomorphic, browser-ready), ADRs, and full documentation wiring |

@@ -61,4 +61,8 @@ describe('ESM bundle (dist/data-api-core.esm.js)', () => {
     assert.match(source, /\btextMerge\b/, 'Bundle must export textMerge');
   });
 
+  it('exports SyncClient', () => {
+    assert.match(source, /\bSyncClient\b/, 'Bundle must export SyncClient');
+  });
+
 });

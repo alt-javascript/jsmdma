@@ -8,6 +8,7 @@
     ".": "./index.js"
   },
   "scripts": {
+    "build": "esbuild index.js --bundle --format=esm --outfile=dist/data-api-core.esm.js",
     "test": "mocha --recursive test/**/*.spec.js"
   },
   "keywords": [
@@ -20,6 +21,7 @@
   ],
   "devDependencies": {
     "chai": "^4.3.7",
+    "esbuild": "^0.25.0",
     "mocha": "^11.7.5"
   },
   "license": "MIT",

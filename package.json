@@ -7,6 +7,7 @@
     "packages/*"
   ],
   "scripts": {
+    "build": "npm run build -w packages/core",
     "test": "npm test --workspaces --if-present",
     "test:core": "npm test -w packages/core",
     "test:server": "npm test -w packages/server",
