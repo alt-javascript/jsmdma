@@ -1,4 +1,4 @@
-# MT-MP-MD
+# jsmdma 
 
 ## Multi-tenant, Multi-purpose, Multi-device (Mobile & Web) NoSQL Application Storage 
 
