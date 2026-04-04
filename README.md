@@ -1,6 +1,6 @@
 # jsmdma 
 
-## Multi-Device Mobile Architecture
+## Multi-Device Mobile Architecture for Javascript
 
 ### A Multi-tenant, Multi-purpose, Multi-device (Mobile & Web)  Local and Remote NoSQL Application Storage 
 
