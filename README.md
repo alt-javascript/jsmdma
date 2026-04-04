@@ -1,6 +1,8 @@
-# data-api
+# MT-MP-MD
 
-An offline-first, multipurpose data sync API built on the [alt-javascript/boot](https://github.com/alt-javascript/boot) ecosystem. Clients (browser, mobile, Node.js) maintain a local copy of data and synchronise bidirectionally with a server using field-level merge and causal conflict resolution. Network outages are handled gracefully — applications continue working locally and sync when connectivity is restored.
+## Multi-tenant, Multi-purpose, Multi-device (Mobile & Web) NoSQL Application Storage 
+
+An offline-first, multitenant, multipurpose application data API built on the [alt-javascript/boot](https://github.com/alt-javascript/boot) ecosystem. Clients (browser, mobile, Node.js) maintain a local copy of data and synchronise bidirectionally with a server using field-level merge and causal conflict resolution. Network outages are handled gracefully — applications continue working locally and sync when connectivity is restored.
 
 A single running server supports multiple **configured applications** (e.g. `todo`, `shopping-list`, your own custom apps). Each application has its own isolated user-scoped storage, optional JSON Schema validation, and smart conflict resolution that auto-merges non-overlapping line-level text changes instead of discarding one side.
 
