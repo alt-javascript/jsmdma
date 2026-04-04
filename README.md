@@ -2,7 +2,7 @@
 
 ## Multi-Device Mobile Architecture for Javascript
 
-### A Multi-tenant, Multi-purpose, Multi-device (Mobile & Web)  Local and Remote NoSQL Application Storage 
+### Multi-tenant, Multi-purpose, Multi-device (Mobile & Web)  Local and Remote NoSQL Application Storage 
 
 An offline-first, multitenant, multipurpose application data API built on the [alt-javascript/boot](https://github.com/alt-javascript/boot) ecosystem. Clients (browser, mobile, Node.js) maintain a local copy of data and synchronise bidirectionally with a server using field-level merge and causal conflict resolution. Network outages are handled gracefully — applications continue working locally and sync when connectivity is restored.
 
