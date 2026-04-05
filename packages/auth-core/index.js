@@ -1,5 +1,5 @@
 /**
- * index.js — Public exports for @alt-javascript/data-api-auth-core
+ * index.js — Public exports for @alt-javascript/jsmdma-auth-core
  */
 
 export { default as JwtSession } from './JwtSession.js';

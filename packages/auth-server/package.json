@@ -1,7 +1,7 @@
 {
-  "name": "@alt-javascript/data-api-auth-server",
-  "version": "0.1.0",
-  "description": "Auth service and user repository for data-api identity layer",
+  "name": "@alt-javascript/jsmdma-auth-server",
+  "version": "1.0.0",
+  "description": "Auth service and user repository for jsmdma identity layer",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -11,13 +11,24 @@
     "test": "mocha --recursive test/**/*.spec.js"
   },
   "keywords": [
+    "jsmdma",
     "alt-javascript",
     "oauth",
     "auth",
     "identity"
   ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "homepage": "https://github.com/alt-javascript/jsmdma/tree/main/packages/auth-server#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alt-javascript/jsmdma",
+    "directory": "packages/auth-server"
+  },
   "dependencies": {
-    "@alt-javascript/data-api-auth-core": "*",
+    "@alt-javascript/jsmdma-auth-core": "*",
     "@alt-javascript/jsnosqlc-core": "^1.0.1"
   },
   "devDependencies": {

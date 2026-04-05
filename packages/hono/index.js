@@ -1,5 +1,5 @@
 /**
- * index.js — Public exports for @alt-javascript/data-api-hono
+ * index.js — Public exports for @alt-javascript/jsmdma-hono
  */
 
 export { default as AppSyncController }  from './AppSyncController.js';

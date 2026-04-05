@@ -1,6 +1,6 @@
 # Data Model Reference
 
-This document is the canonical entity model reference for **data-api**. It covers both operating modes (flat/no-org and org-enabled), Mermaid ER diagrams for each mode, all entity field shapes sourced from the implementation, every storage key pattern with encoding rules, and the sharing model design.
+This document is the canonical entity model reference for **jsmdma**. It covers both operating modes (flat/no-org and org-enabled), Mermaid ER diagrams for each mode, all entity field shapes sourced from the implementation, every storage key pattern with encoding rules, and the sharing model design.
 
 ---
 
@@ -20,7 +20,7 @@ This document is the canonical entity model reference for **data-api**. It cover
 
 ## 1. Overview
 
-data-api is an offline-first, bidirectional sync API. Clients maintain local data copies and sync with the server using field-level merge and HLC-based causal conflict resolution.
+jsmdma is an offline-first, bidirectional sync API. Clients maintain local data copies and sync with the server using field-level merge and HLC-based causal conflict resolution.
 
 **Which mode to use:**
 

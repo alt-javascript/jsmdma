@@ -1,7 +1,7 @@
 /**
  * run.js — Offline-first sync example (updated for M003)
  *
- * Demonstrates the data-api sync protocol end-to-end:
+ * Demonstrates the jsmdma sync protocol end-to-end:
  *
  *   1. Start a CDI-managed Hono server (AppSyncController, auth middleware)
  *   2. Establish a shared starting document (initial sync via /:application/sync)
@@ -25,11 +25,11 @@ import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
 import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
-import { SyncRepository, SyncService, ApplicationRegistry, SchemaValidator } from '@alt-javascript/data-api-server';
-import { AppSyncController } from '@alt-javascript/data-api-hono';
-import { AuthMiddlewareRegistrar } from '@alt-javascript/data-api-auth-hono';
-import { JwtSession } from '@alt-javascript/data-api-auth-core';
-import { HLC } from '@alt-javascript/data-api-core';
+import { SyncRepository, SyncService, ApplicationRegistry, SchemaValidator } from '@alt-javascript/jsmdma-server';
+import { AppSyncController } from '@alt-javascript/jsmdma-hono';
+import { AuthMiddlewareRegistrar } from '@alt-javascript/jsmdma-auth-hono';
+import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
+import { HLC } from '@alt-javascript/jsmdma-core';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -132,7 +132,7 @@ class SyncClient {
 // ── main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
-  banner('data-api — Offline-First Sync Example (M003)');
+  banner('jsmdma — Offline-First Sync Example (M003)');
 
   // ── 1. Start CDI context ──────────────────────────────────────────────────
 

@@ -13,9 +13,9 @@ import { fileURLToPath } from 'url';
 import { assert } from 'chai';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const BUNDLE_PATH = resolve(__dirname, '../dist/data-api-core.esm.js');
+const BUNDLE_PATH = resolve(__dirname, '../dist/jsmdma-core.esm.js');
 
-describe('ESM bundle (dist/data-api-core.esm.js)', () => {
+describe('ESM bundle (dist/jsmdma-core.esm.js)', () => {
 
   let source;
 

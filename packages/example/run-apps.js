@@ -21,14 +21,14 @@ import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
 import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
-import { SyncRepository, SyncService, SearchService, ApplicationRegistry, SchemaValidator, DocumentIndexRepository, ExportService, DeletionService } from '@alt-javascript/data-api-server';
-import { AppSyncController, DocIndexController, SearchController, ExportController, DeletionController } from '@alt-javascript/data-api-hono';
-import { AuthMiddlewareRegistrar, OrgController } from '@alt-javascript/data-api-auth-hono';
+import { SyncRepository, SyncService, SearchService, ApplicationRegistry, SchemaValidator, DocumentIndexRepository, ExportService, DeletionService } from '@alt-javascript/jsmdma-server';
+import { AppSyncController, DocIndexController, SearchController, ExportController, DeletionController } from '@alt-javascript/jsmdma-hono';
+import { AuthMiddlewareRegistrar, OrgController } from '@alt-javascript/jsmdma-auth-hono';
 import {
   UserRepository, OrgRepository, OrgService,
-} from '@alt-javascript/data-api-auth-server';
-import { JwtSession } from '@alt-javascript/data-api-auth-core';
-import { HLC } from '@alt-javascript/data-api-core';
+} from '@alt-javascript/jsmdma-auth-server';
+import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
+import { HLC } from '@alt-javascript/jsmdma-core';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -233,7 +233,7 @@ async function deleteReq(app, path, token) {
 // ── main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  banner('data-api — Multi-App Example (M003 + M004)');
+  banner('jsmdma — Multi-App Example (M003 + M004)');
 
   const { app, appCtx } = await buildApp();
   ok('Hono server ready (two applications: todo, shopping-list; org management enabled)');

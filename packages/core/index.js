@@ -1,5 +1,5 @@
 /**
- * index.js — Public exports for @alt-javascript/data-api-core
+ * index.js — Public exports for @alt-javascript/jsmdma-core
  */
 
 export { default as HLC } from './hlc.js';

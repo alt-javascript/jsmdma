@@ -27,3 +27,6 @@ coverage/
 .cache/
 tmp/
 /.bg-shell/
+
+# ── GSD baseline (auto-generated) ──
+.gsd-id

@@ -35,12 +35,12 @@ node packages/example/run-apps.js  # multi-app + org demo
 
 | Package | npm name | Role |
 |---|---|---|
-| `packages/core` | `@alt-javascript/data-api-core` | Isomorphic: HLC clock, field diff, merge, textMerge, flatten (zero Node deps) |
-| `packages/server` | `@alt-javascript/data-api-server` | SyncRepository, SyncService, ApplicationRegistry, SchemaValidator |
-| `packages/hono` | `@alt-javascript/data-api-hono` | AppSyncController — Hono route wiring |
-| `packages/auth-core` | `@alt-javascript/data-api-auth-core` | JWT session helpers, OAuth provider errors |
-| `packages/auth-server` | `@alt-javascript/data-api-auth-server` | UserRepository, AuthService, OrgRepository, OrgService |
-| `packages/auth-hono` | `@alt-javascript/data-api-auth-hono` | AuthMiddlewareRegistrar, AuthController, OrgController |
+| `packages/core` | `@alt-javascript/jsmdma-core` | Isomorphic: HLC clock, field diff, merge, textMerge, flatten (zero Node deps) |
+| `packages/server` | `@alt-javascript/jsmdma-server` | SyncRepository, SyncService, ApplicationRegistry, SchemaValidator |
+| `packages/hono` | `@alt-javascript/jsmdma-hono` | AppSyncController — Hono route wiring |
+| `packages/auth-core` | `@alt-javascript/jsmdma-auth-core` | JWT session helpers, OAuth provider errors |
+| `packages/auth-server` | `@alt-javascript/jsmdma-auth-server` | UserRepository, AuthService, OrgRepository, OrgService |
+| `packages/auth-hono` | `@alt-javascript/jsmdma-auth-hono` | AuthMiddlewareRegistrar, AuthController, OrgController |
 | `packages/example` | — | Runnable sync demos |
 | `packages/example-auth` | — | Runnable auth demo |
 

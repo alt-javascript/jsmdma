@@ -6,7 +6,7 @@
 
 ## Context
 
-data-api supports organisation-scoped documents and team membership. The system needs to decide how org creation is controlled — specifically, whether any authenticated user can create an org or whether an operator can lock down self-service registration.
+jsmdma supports organisation-scoped documents and team membership. The system needs to decide how org creation is controlled — specifically, whether any authenticated user can create an org or whether an operator can lock down self-service registration.
 
 The main alternatives considered were:
 

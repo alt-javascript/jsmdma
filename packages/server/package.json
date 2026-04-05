@@ -1,7 +1,7 @@
 {
-  "name": "@alt-javascript/data-api-server",
-  "version": "0.1.0",
-  "description": "Sync service and repository for data-api — CDI-managed, framework-agnostic",
+  "name": "@alt-javascript/jsmdma-server",
+  "version": "1.0.0",
+  "description": "Sync service and repository for jsmdma — CDI-managed, framework-agnostic",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -11,13 +11,24 @@
     "test": "mocha --recursive test/**/*.spec.js"
   },
   "keywords": [
+    "jsmdma",
     "alt-javascript",
     "sync",
     "nosql",
     "offline-first"
   ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "homepage": "https://github.com/alt-javascript/jsmdma/tree/main/packages/server#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alt-javascript/jsmdma",
+    "directory": "packages/server"
+  },
   "dependencies": {
-    "@alt-javascript/data-api-core": "*",
+    "@alt-javascript/jsmdma-core": "*",
     "@alt-javascript/jsnosqlc-core": "^1.0.1",
     "ajv": "^8.18.0"
   },

@@ -29,7 +29,7 @@
  *   this.documentIndexRepository   — DocumentIndexRepository instance (optional; skip upsert if not wired)
  *   this.logger                    — optional logger
  */
-import { namespaceKey } from '@alt-javascript/data-api-server';
+import { namespaceKey } from '@alt-javascript/jsmdma-server';
 
 export default class AppSyncController {
   static __routes = [

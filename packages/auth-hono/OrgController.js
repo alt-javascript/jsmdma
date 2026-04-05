@@ -31,7 +31,7 @@ import {
   AlreadyMemberError,
   NotMemberError,
   DuplicateOrgNameError,
-} from '@alt-javascript/data-api-auth-server';
+} from '@alt-javascript/jsmdma-auth-server';
 
 export default class OrgController {
   static __routes = [

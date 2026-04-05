@@ -1,7 +1,7 @@
 {
-  "name": "@alt-javascript/data-api-auth-core",
-  "version": "0.1.0",
-  "description": "Isomorphic auth core for data-api: JWT session engine and OAuth provider wrappers",
+  "name": "@alt-javascript/jsmdma-auth-core",
+  "version": "1.0.0",
+  "description": "Isomorphic auth core for jsmdma: JWT session engine and OAuth provider wrappers",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -11,12 +11,23 @@
     "test": "mocha --recursive test/**/*.spec.js"
   },
   "keywords": [
+    "jsmdma",
     "alt-javascript",
     "oauth",
     "jwt",
     "auth",
     "offline-first"
   ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "homepage": "https://github.com/alt-javascript/jsmdma/tree/main/packages/auth-core#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alt-javascript/jsmdma",
+    "directory": "packages/auth-core"
+  },
   "dependencies": {
     "arctic": "3.7.0",
     "jose": "^6.0.0"

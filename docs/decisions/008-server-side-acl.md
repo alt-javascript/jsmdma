@@ -6,7 +6,7 @@
 
 ## Context
 
-Documents in data-api can be private, shared with specific users, shared with an org, or fully public. The system needs to decide where visibility rules are evaluated: in the client, in the server request handler, or in a dedicated layer.
+Documents in jsmdma can be private, shared with specific users, shared with an org, or fully public. The system needs to decide where visibility rules are evaluated: in the client, in the server request handler, or in a dedicated layer.
 
 The main alternatives considered were:
 

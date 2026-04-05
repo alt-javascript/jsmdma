@@ -6,7 +6,7 @@
 
 ## Context
 
-Each document stored in data-api needs associated ownership and visibility metadata: who owns it, which app and collection it belongs to, its visibility level, who it is shared with, and whether a share token is active. The system needs to decide where this metadata lives.
+Each document stored in jsmdma needs associated ownership and visibility metadata: who owns it, which app and collection it belongs to, its visibility level, who it is shared with, and whether a share token is active. The system needs to decide where this metadata lives.
 
 The main alternatives considered were:
 

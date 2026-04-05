@@ -6,9 +6,9 @@
 
 ## Context
 
-`year-planner` is a no-bundler PWA (plain HTML/CSS/JS, no Webpack or Vite). It imports `HLC`, `merge`, `textMerge`, and `flatten` from `data-api-core`. The browser cannot resolve bare npm specifiers (`import ... from '@alt-javascript/data-api-core'`) without a bundler or import map. Options:
+`year-planner` is a no-bundler PWA (plain HTML/CSS/JS, no Webpack or Vite). It imports `HLC`, `merge`, `textMerge`, and `flatten` from `jsmdma-core`. The browser cannot resolve bare npm specifiers (`import ... from '@alt-javascript/jsmdma-core'`) without a bundler or import map. Options:
 
-1. **Publish to npm and serve via jsDelivr CDN** — Clean long-term solution. The CDN URL `https://cdn.jsdelivr.net/npm/@alt-javascript/data-api-core@x.y.z/dist/data-api-core.esm.js` works as an ES module import. Requires npm publish first.
+1. **Publish to npm and serve via jsDelivr CDN** — Clean long-term solution. The CDN URL `https://cdn.jsdelivr.net/npm/@alt-javascript/jsmdma-core@x.y.z/dist/jsmdma-core.esm.js` works as an ES module import. Requires npm publish first.
 
 2. **Commit a built bundle as a local asset** — Unblocks year-planner development immediately, without waiting for npm publish. The bundle is a single ESM file with zero external dependencies. It is a build artifact in source control — not ideal, but temporary.
 
@@ -16,25 +16,25 @@
 
 ## Decision
 
-Build `dist/data-api-core.esm.js` from `packages/core/index.js` using esbuild:
+Build `dist/jsmdma-core.esm.js` from `packages/core/index.js` using esbuild:
 
 ```sh
-esbuild index.js --bundle --format=esm --outfile=dist/data-api-core.esm.js
+esbuild index.js --bundle --format=esm --outfile=dist/jsmdma-core.esm.js
 ```
 
 **Build configuration:**
 - **Tool:** esbuild v0.25.0 (devDependency in packages/core).
 - **Entry point:** `packages/core/index.js` — exports HLC, merge, textMerge, flatten, unflatten, SyncClient, fieldDiff.
 - **Format:** ESM (`--format=esm`).
-- **Output:** `packages/core/dist/data-api-core.esm.js`.
+- **Output:** `packages/core/dist/jsmdma-core.esm.js`.
 - **Target bundle size:** < 30 kB. Actual output: approximately 16.9 kB (all 7 exports included, no external dependencies to tree-shake).
 - **No config file** required — single esbuild command sufficient.
 
-**Initial deployment:** The built bundle is committed to `year-planner` as a local asset at `js/vendor/data-api-core.esm.js`. The import in year-planner HTML is:
+**Initial deployment:** The built bundle is committed to `year-planner` as a local asset at `js/vendor/jsmdma-core.esm.js`. The import in year-planner HTML is:
 
 ```html
 <script type="module">
-  import HLC from './js/vendor/data-api-core.esm.js';
+  import HLC from './js/vendor/jsmdma-core.esm.js';
   ...
 </script>
 ```

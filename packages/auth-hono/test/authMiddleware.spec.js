@@ -6,7 +6,7 @@
 import { assert } from 'chai';
 import { Hono } from 'hono';
 import { SignJWT } from 'jose';
-import { JwtSession } from '@alt-javascript/data-api-auth-core';
+import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 import { authMiddleware } from '../authMiddleware.js';
 
 const SECRET = 'middleware-test-secret-32-chars!!';

@@ -1,5 +1,5 @@
 /**
- * SyncController.js — Hono controller for the data-api sync endpoint.
+ * SyncController.js — Hono controller for the jsmdma sync endpoint.
  *
  * Exposes two routes:
  *   GET  /health — liveness check

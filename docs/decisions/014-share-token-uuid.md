@@ -6,7 +6,7 @@
 
 ## Context
 
-data-api supports direct-link document sharing: the document owner mints a token and distributes it. Anyone with the token can access the document without being in `sharedWith`. The system needs to decide the token format.
+jsmdma supports direct-link document sharing: the document owner mints a token and distributes it. Anyone with the token can access the document without being in `sharedWith`. The system needs to decide the token format.
 
 The main alternatives considered were:
 

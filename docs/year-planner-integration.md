@@ -1,7 +1,7 @@
-# year-planner × data-api Integration Guide
+# year-planner × jsmdma Integration Guide
 
-This guide explains how to wire up **data-api** as the backend for the
-**year-planner** GSD project. data-api provides offline-first, bidirectional
+This guide explains how to wire up **jsmdma** as the backend for the
+**year-planner** GSD project. jsmdma provides offline-first, bidirectional
 sync with field-level merge and HLC-based causal conflict resolution;
 year-planner uses it to persist planner documents and sync state across
 multiple devices or browser tabs.
@@ -24,7 +24,7 @@ multiple devices or browser tabs.
 
 ## 1. Overview
 
-data-api is an offline-first, bidirectional sync service built on the
+jsmdma is an offline-first, bidirectional sync service built on the
 alt-javascript/boot CDI ecosystem. Core properties:
 
 - **Field-level merge** — each leaf field carries its own HLC revision;
@@ -80,10 +80,10 @@ import {
   SyncRepository, SyncService,
   ApplicationRegistry, SchemaValidator,
   DocumentIndexRepository,
-} from '@alt-javascript/data-api-server';
-import { AppSyncController, DocIndexController } from '@alt-javascript/data-api-hono';
-import { AuthMiddlewareRegistrar, OrgController } from '@alt-javascript/data-api-auth-hono';
-import { UserRepository, OrgRepository, OrgService } from '@alt-javascript/data-api-auth-server';
+} from '@alt-javascript/jsmdma-server';
+import { AppSyncController, DocIndexController } from '@alt-javascript/jsmdma-hono';
+import { AuthMiddlewareRegistrar, OrgController } from '@alt-javascript/jsmdma-auth-hono';
+import { UserRepository, OrgRepository, OrgService } from '@alt-javascript/jsmdma-auth-server';
 
 const JWT_SECRET = process.env.JWT_SECRET; // ≥ 32 chars
 
@@ -214,7 +214,7 @@ Use `JwtSession.sign` to create a token without going through an OAuth
 provider. This is the pattern used throughout `packages/example/run-apps.js`.
 
 ```js
-import { JwtSession } from '@alt-javascript/data-api-auth-core';
+import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 
 const JWT_SECRET = 'your-dev-secret-at-least-32-chars!!';
 
@@ -285,7 +285,7 @@ const { serverChanges, serverClock, conflicts } = await res.json();
 ### Subsequent syncs (bidirectional)
 
 ```js
-import { HLC } from '@alt-javascript/data-api-core';
+import { HLC } from '@alt-javascript/jsmdma-core';
 
 // Advance the local clock before writing a new document
 const newClock = HLC.tick(lastServerClock, Date.now());
@@ -442,7 +442,7 @@ The core package is isomorphic — it runs in browsers, Node, and edge runtimes
 with no Node-specific dependencies.
 
 ```js
-import { HLC } from '@alt-javascript/data-api-core';
+import { HLC } from '@alt-javascript/jsmdma-core';
 
 // Zero clock — "I have seen nothing yet"
 // All real clocks compare greater than this value

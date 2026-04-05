@@ -51,7 +51,7 @@ export default class GitHubProvider {
       const res = await this._fetch('https://api.github.com/user', {
         headers: {
           Authorization: `Bearer ${accessToken}`,
-          'User-Agent':  'data-api',
+          'User-Agent':  'jsmdma',
           Accept:        'application/vnd.github+json',
         },
       });
@@ -69,7 +69,7 @@ export default class GitHubProvider {
         const res = await this._fetch('https://api.github.com/user/emails', {
           headers: {
             Authorization: `Bearer ${accessToken}`,
-            'User-Agent':  'data-api',
+            'User-Agent':  'jsmdma',
             Accept:        'application/vnd.github+json',
           },
         });

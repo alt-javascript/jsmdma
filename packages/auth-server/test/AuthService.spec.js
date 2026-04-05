@@ -7,8 +7,8 @@
 import { assert } from 'chai';
 import { DriverManager } from '@alt-javascript/jsnosqlc-core';
 import '@alt-javascript/jsnosqlc-memory';
-import { JwtSession } from '@alt-javascript/data-api-auth-core';
-import { InvalidStateError } from '@alt-javascript/data-api-auth-core';
+import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
+import { InvalidStateError } from '@alt-javascript/jsmdma-auth-core';
 import UserRepository from '../UserRepository.js';
 import AuthService    from '../AuthService.js';
 

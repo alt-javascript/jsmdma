@@ -1,14 +1,54 @@
-# jsmdma 
+# jsmdma
 
-## Multi-Device Mobile Architecture for Javascript
+## Multi-Device Mobile Architecture for JavaScript
 
-### Multi-tenant, Multi-purpose, Multi-device (Mobile & Web)  Local and Remote NoSQL Application Storage 
+### Offline-first, multi-tenant, multi-purpose NoSQL application storage — local and remote, synchronised bidirectionally
 
-An offline-first, multitenant, multipurpose application data API built on the [alt-javascript/boot](https://github.com/alt-javascript/boot) ecosystem. Clients (browser, mobile, Node.js) maintain a local copy of data and synchronise bidirectionally with a server using field-level merge and causal conflict resolution. Network outages are handled gracefully — applications continue working locally and sync when connectivity is restored.
+[![Language](https://img.shields.io/badge/language-JavaScript-yellow.svg)](https://developer.mozilla.org/en-US/docs/Web/JavaScript)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![npm](https://img.shields.io/badge/npm-%40alt--javascript-red.svg)](https://www.npmjs.com/search?q=%40alt-javascript%2Fjsmdma)
 
-A single running server supports multiple **configured applications** (e.g. `todo`, `shopping-list`, your own custom apps). Each application has its own isolated user-scoped storage, optional JSON Schema validation, and smart conflict resolution that auto-merges non-overlapping line-level text changes instead of discarding one side.
+Clients — browser, mobile, or Node.js — maintain a local copy of application data and synchronise bidirectionally with a server using field-level merge and causal conflict resolution. Network outages are handled gracefully: applications continue operating locally and sync when connectivity is restored.
 
-Users can belong to **organisations** — app-agnostic named groups. An org member can sync under the org's isolated namespace in any configured application by sending an `X-Org-Id` header.
+A single server supports multiple **configured applications** (e.g. `todo`, `shopping-list`, your own apps). Each application has isolated, user-scoped storage, optional JSON Schema validation, and smart conflict resolution that auto-merges non-overlapping line-level text changes rather than discarding one side.
+
+Users can belong to **organisations** — app-agnostic named groups. An org member syncs under the org's isolated namespace in any configured application by sending an `X-Org-Id` header.
+
+**Part of the [@alt-javascript](https://github.com/alt-javascript) ecosystem.**
+
+---
+
+## Packages
+
+| Package | npm | Description |
+|---|---|---|
+| [`packages/core`](packages/core/) | [`@alt-javascript/jsmdma-core`](https://www.npmjs.com/package/@alt-javascript/jsmdma-core) | Isomorphic: HLC clock, field diff, merge engine, SyncClient (no Node deps) |
+| [`packages/server`](packages/server/) | [`@alt-javascript/jsmdma-server`](https://www.npmjs.com/package/@alt-javascript/jsmdma-server) | SyncRepository, SyncService, ApplicationRegistry, SchemaValidator |
+| [`packages/hono`](packages/hono/) | [`@alt-javascript/jsmdma-hono`](https://www.npmjs.com/package/@alt-javascript/jsmdma-hono) | AppSyncController — Hono route wiring |
+| [`packages/auth-core`](packages/auth-core/) | [`@alt-javascript/jsmdma-auth-core`](https://www.npmjs.com/package/@alt-javascript/jsmdma-auth-core) | JWT session helpers, OAuth provider errors |
+| [`packages/auth-server`](packages/auth-server/) | [`@alt-javascript/jsmdma-auth-server`](https://www.npmjs.com/package/@alt-javascript/jsmdma-auth-server) | UserRepository, AuthService, OrgRepository, OrgService |
+| [`packages/auth-hono`](packages/auth-hono/) | [`@alt-javascript/jsmdma-auth-hono`](https://www.npmjs.com/package/@alt-javascript/jsmdma-auth-hono) | AuthMiddlewareRegistrar, AuthController, OrgController |
+| [`packages/example`](packages/example/) | — (private) | Runnable sync demos: `run.js`, `run-apps.js` |
+| [`packages/example-auth`](packages/example-auth/) | — (private) | Runnable auth lifecycle demo |
+
+---
+
+## Quick Start
+
+```bash
+npm install
+npm test
+
+# Offline-first two-device demo
+node packages/example/run.js
+
+# Multi-app + org demo
+node packages/example/run-apps.js
+```
+
+**Prerequisites:** Node.js ≥ 20
+
+---
 
 ## Architecture
 
@@ -133,7 +173,6 @@ packages/
 The `applications` config block declares which application paths are accepted by the server. Unknown application names return `404`.
 
 ```js
-// EphemeralConfig or application.yaml / config.js
 {
   applications: {
     todo: {
@@ -151,7 +190,7 @@ The `applications` config block declares which application paths are accepted by
           },
         },
         notes: {
-          // Option B — schema loaded from disk (schemaPath wins when both present)
+          // Option B — schema loaded from disk
           schemaPath: './schemas/note.json',
         },
       },
@@ -163,20 +202,15 @@ The `applications` config block declares which application paths are accepted by
 }
 ```
 
-**Schema resolution order:**
-1. `schemaPath` — JSON file loaded at first validation call (relative to process.cwd())
-2. `schema` — inline JSON Schema object in config
-3. Neither present → no validation; all documents accepted
-
 **CDI context assembly:**
 
 ```js
 import {
   SyncRepository, SyncService,
   ApplicationRegistry, SchemaValidator,
-} from '@alt-javascript/data-api-server';
-import { AppSyncController } from '@alt-javascript/data-api-hono';
-import { AuthMiddlewareRegistrar } from '@alt-javascript/data-api-auth-hono';
+} from '@alt-javascript/jsmdma-server';
+import { AppSyncController } from '@alt-javascript/jsmdma-hono';
+import { AuthMiddlewareRegistrar } from '@alt-javascript/jsmdma-auth-hono';
 
 const context = new Context([
   ...honoStarter(),
@@ -194,313 +228,93 @@ const context = new Context([
 ]);
 ```
 
-**Storage isolation:**  
-Storage keys are namespaced as `{userId}:{application}:{collection}` (colons in segment values are percent-encoded as `%3A`). Two users posting to the same `/:application/sync` path cannot read each other's documents.
+**Storage isolation:**
+Storage keys are namespaced as `{userId}:{application}:{collection}`. Two users posting to the same `/:application/sync` path cannot read each other's documents.
 
 ---
 
-## Organisations (M004)
+## Organisations
 
-Organisations are app-agnostic named groups. A user creates an org and becomes its first `org-admin`. Org admins can add/remove members and promote or demote other members. Any member can sync under the org's namespace in any configured application by sending the `X-Org-Id` header.
+Organisations are app-agnostic named groups. A user creates an org and becomes its first `org-admin`. Any member can sync under the org's namespace in any configured application by sending the `X-Org-Id` header.
 
 ### Org Endpoints
 
-All org endpoints require a valid JWT.
-
 | Method | Path | Requires | Description |
 |---|---|---|---|
-| `POST` | `/orgs` | JWT | Create org. Body: `{ name }`. Creator becomes `org-admin`. Returns `{ orgId, name, role }`. |
-| `GET` | `/orgs` | JWT | List all orgs the caller belongs to. |
-| `GET` | `/orgs/:orgId/members` | membership | List all members of an org. |
-| `POST` | `/orgs/:orgId/members` | org-admin | Add a member. Body: `{ userId, role? }`. Role defaults to `member`. |
-| `PATCH` | `/orgs/:orgId/members/:userId` | org-admin | Change a member's role. Body: `{ role }`. Returns `409` if demoting the last org-admin. |
-| `DELETE` | `/orgs/:orgId/members/:userId` | org-admin | Remove a member. Returns `409` if removing the last org-admin. |
-
-**Roles:** `org-admin` — full management rights. `member` — read/write access to org data, read-only to member list.
-
-### Org-Scoped Sync
-
-To sync documents into an org's namespace, add the `X-Org-Id` header to any `POST /:application/sync` request:
+| `POST` | `/orgs` | JWT | Create org. Body: `{ name }`. |
+| `GET` | `/orgs` | JWT | List orgs the caller belongs to. |
+| `GET` | `/orgs/:orgId/members` | membership | List members. |
+| `POST` | `/orgs/:orgId/members` | org-admin | Add a member. Body: `{ userId, role? }`. |
+| `PATCH` | `/orgs/:orgId/members/:userId` | org-admin | Change a member's role. |
+| `DELETE` | `/orgs/:orgId/members/:userId` | org-admin | Remove a member. |
 
 ```http
 POST /todo/sync
 Authorization: Bearer <token>
 X-Org-Id: <orgId>
-Content-Type: application/json
-
-{ "collection": "tasks", "clientClock": "...", "changes": [...] }
-```
-
-- **Member check:** The server performs a live lookup — only members of the org can use its namespace.
-- **Non-member:** `403 { error: 'Not a member of organisation: ...' }`
-- **No header:** Personal namespace (unchanged behaviour)
-
-### Storage Namespace Layout
-
-```
-Personal sync (no X-Org-Id):
-  {userId}:{application}:{collection}
-  e.g.  alice-uuid:todo:tasks
-
-Org-scoped sync (X-Org-Id: <orgId>):
-  org:{orgId}:{application}:{collection}
-  e.g.  org:3f7b...a1:todo:tasks
-         org:3f7b...a1:shopping-list:lists
-
-Key properties:
-- org: prefix is unambiguous — userIds are UUIDs and never start with 'org:'
-- Same orgId across different applications → isolated namespaces per app
-- Personal and org namespaces are completely isolated even for the same user
-```
-
-### CDI Context Assembly (with Orgs)
-
-```js
-import {
-  UserRepository, AuthService,
-  OrgRepository, OrgService,
-} from '@alt-javascript/data-api-auth-server';
-import { OrgController } from '@alt-javascript/data-api-auth-hono';
-
-const context = new Context([
-  // ... sync components from M003 context ...
-  { Reference: UserRepository,  name: 'userRepository',  scope: 'singleton' },
-  { Reference: AuthService,     name: 'authService',     scope: 'singleton',
-    properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
-  { Reference: OrgRepository,   name: 'orgRepository',   scope: 'singleton' },
-  { Reference: OrgService,      name: 'orgService',      scope: 'singleton' },
-  // ↓ Auth middleware MUST come before all controllers
-  { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
-    properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
-  { Reference: AppSyncController, name: 'appSyncController', scope: 'singleton' },
-  { Reference: AuthController,    name: 'authController',    scope: 'singleton' },
-  { Reference: OrgController,     name: 'orgController',     scope: 'singleton' },
-]);
 ```
 
 ---
 
 ## HLC Format
 
-HLC (Hybrid Logical Clock) is a causality-preserving clock that combines wall time with a logical counter. This project encodes it as a zero-padded hex string:
-
 ```
 <13-hex-ms>-<6-hex-seq>-<node>
 
 Example: 0019d2bc1234a-000001-client-uuid
-         ↑ wall ms     ↑ seq  ↑ node id
 ```
 
-- **13 hex digits for ms** — covers wall time to year ~143,000,000 from epoch
-- **6 hex digits for seq** — up to 16,777,215 events per millisecond
-- **node** — stable unique identifier for the sender (UUID or short ID)
-
-**Key property:** HLC strings are lexicographically ordered, so `a > b` in string comparison means "a happened after b causally". This means HLC strings can be used directly as NoSQL sort keys and with range queries (`Filter.where('_rev').gt(clientClock)`).
-
-**Using HLC in your client:**
-```js
-import { HLC } from '@alt-javascript/data-api-core';
-
-// Create a new clock for this node
-let clock = HLC.create('my-device-uuid', Date.now());
-
-// Advance before each local edit
-clock = HLC.tick(clock, Date.now());
-fieldRevs[field] = clock;
-
-// Advance on receiving server response
-clock = HLC.recv(clock, serverClock, Date.now());
-```
+HLC strings are lexicographically ordered — `a > b` in string comparison means "a happened after b causally". They can be used directly as NoSQL sort keys and in range queries.
 
 ---
 
 ## Conflict Resolution
 
-A conflict occurs when **both the client and the server** changed the same field since the client's `baseClock`.
+A conflict occurs when both client and server changed the same field since the client's `baseClock`.
 
-**Detection:**
-```
-clientChanged = clientFieldRevs[field] > baseClock
-serverChanged = serverFieldRevs[field] > baseClock
+1. **Text auto-merge** — non-overlapping line-level hunks are merged and applied; `winner: 'auto-merged'`
+2. **HLC winner fallback** — overlapping hunks: higher HLC wins; equal HLC → local wins
 
-if (clientChanged && serverChanged) → conflict
-```
-
-**Resolution order for string fields:**
-1. **Text auto-merge** — split both values into lines and diff against the base. If the local and remote change-sets produce non-overlapping hunks (no line is edited by both sides), apply both sets and return the merged text. The conflict entry reports `winner: 'auto-merged'` and `mergeStrategy: 'text-auto-merged'`. The client can display this as informational — no data was lost.
-2. **HLC winner fallback** — if hunks overlap (both sides changed the same lines), the version with the higher HLC wins. Equal HLC → local wins as a stable tie-break. The conflict entry reports `winner: 'local'` or `winner: 'remote'`.
-
-**Resolution for non-string fields:**
-- Higher HLC wins directly (no text diff attempted)
-- Equal HLC → local wins
-
-**The client should display warnings** when `winner === 'local'` or `winner === 'remote'` — the losing value is gone and the user may want to review it.  `winner === 'auto-merged'` is informational — both sides' changes are preserved in the merged value.
+Non-string fields go straight to step 2.
 
 ---
 
 ## How to Run
 
-**Prerequisites:** Node.js ≥ 20, npm ≥ 7
-
 ```bash
-# Install all workspaces
 npm install
-
-# Run all tests
 npm test
 
-# Run the offline-first example (two devices, same user, HLC conflict)
+# Offline-first two-device demo
 node packages/example/run.js
 
-# Run the multi-app example (todo + shopping-list, two users, schema validation)
+# Multi-app + org demo
 node packages/example/run-apps.js
-```
 
-**Expected run.js output:**
-```
-  ✓ field1 = "A-edit"   (only Client A changed this — clean merge)
-  ✓ field2 = "B-edit"   (both changed — conflict, B wins (higher HLC))
-  ✓ field3 = "B-edit"   (only Client B changed this — clean merge)
-
-  All assertions passed. Offline-first sync protocol working correctly.
-```
-
-**Expected run-apps.js output:**
-```
-  ✓ Unknown application → 404
-  ✓ Invalid todo doc (missing title) → 400 with schema details
-  ✓ Valid todo task → 200 stored and retrievable
-  ✓ User isolation — Bob cannot see Alice's data
-  ✓ Text auto-merge attempted on concurrent notes edits
-  ✓ Shopping list (no schema) syncs free-form documents
-  ✓ Shopping list user isolation — Bob cannot see Alice's lists
-  ✓ Org created; Bob added as member
-  ✓ Alice + Bob share documents via x-org-id header
-  ✓ Carol (non-member) rejected with 403
-  ✓ Org namespace isolated from personal namespace
-
-  Multi-app, multi-user, org-scoped sync working correctly.
+# Auth lifecycle demo
+node packages/example-auth/run.js
 ```
 
 ---
 
-## Package Map
-
-| Package | Description |
-|---|---|
-| `packages/core` | `@alt-javascript/data-api-core` — HLC, diff, merge, textMerge (isomorphic) |
-| `packages/server` | `@alt-javascript/data-api-server` — SyncRepository, SyncService, ApplicationRegistry, SchemaValidator |
-| `packages/hono` | `@alt-javascript/data-api-hono` — AppSyncController, boot-hono wiring |
-| `packages/auth-core` | `@alt-javascript/data-api-auth-core` — JWT session, provider errors |
-| `packages/auth-hono` | `@alt-javascript/data-api-auth-hono` — AuthMiddlewareRegistrar, AuthController, OrgController |
-| `packages/auth-server` | `@alt-javascript/data-api-auth-server` — UserRepository, AuthService, OrgRepository, OrgService |
-| `packages/example` | Runnable demos: `run.js` (offline-first), `run-apps.js` (multi-app + orgs) |
-
----
-
-## Auth API (M002)
+## Auth API
 
 ### Endpoints
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/auth/:provider` | — | Begin OAuth flow. Returns `{ authorizationURL, state, codeVerifier }`. |
-| `GET` | `/auth/:provider/callback` | — | Complete OAuth flow. Query: `code`, `state`, `stored_state`, `code_verifier`. Returns `{ user, token }`. |
-| `GET` | `/auth/me` | ✅ | Current user identity from JWT: `{ userId, email, providers }`. |
-| `POST` | `/auth/logout` | — | Stateless logout guidance. Client deletes the stored token. |
-| `POST` | `/auth/link/:provider` | ✅ | Add a second OAuth provider to the current identity. Same query params as callback. |
+| `GET` | `/auth/:provider` | — | Begin OAuth flow. |
+| `GET` | `/auth/:provider/callback` | — | Complete OAuth flow. Returns `{ user, token }`. |
+| `GET` | `/auth/me` | ✅ | Current user identity from JWT. |
+| `POST` | `/auth/logout` | — | Stateless logout guidance. |
+| `POST` | `/auth/link/:provider` | ✅ | Link a second OAuth provider. |
 | `DELETE` | `/auth/providers/:provider` | ✅ | Remove a provider. Returns `409` if it would be the last. |
 
 **Supported providers:** `google`, `github`, `microsoft`, `apple`
 
-### JWT Session Contract
+### JWT Session
 
-Sessions are stateless HS256 JWTs. All protected routes require:
-
-```
-Authorization: Bearer <token>
-```
-
-**Token payload:**
-```json
-{
-  "sub":         "uuid",
-  "providers":   ["github", "google"],
-  "email":       "user@example.com",
-  "iat":         1700000000,
-  "iat_session": 1700000000
-}
-```
-
-**TTL policy:**
-- **Idle TTL:** 3 days — if `now - iat > 3d`, token is rejected with `{ error: 'Session expired', reason: 'idle' }`
-- **Hard TTL:** 7 days — if `now - iat_session > 7d`, token is rejected with `{ error: 'Session expired', reason: 'hard' }`
-- **Rolling refresh:** when `now - iat > 1h`, a fresh token is issued in the `X-Auth-Token` response header. Client should store it and use it for subsequent requests.
-
-### CDI Context Assembly
-
-**Critical ordering rule:** `AuthMiddlewareRegistrar` must be registered **before** `AppSyncController` and `AuthController` in the CDI context array. Hono registers middleware and routes in insertion order — `app.use()` must fire before route handlers.
-
-```js
-const context = new Context([
-  ...honoStarter(),
-  ...jsnosqlcAutoConfiguration(),
-  { Reference: SyncRepository,      name: 'syncRepository',      scope: 'singleton' },
-  { Reference: SyncService,         name: 'syncService',         scope: 'singleton' },
-  { Reference: ApplicationRegistry, name: 'applicationRegistry', scope: 'singleton',
-    properties: [{ name: 'applications', path: 'applications' }] },
-  { Reference: SchemaValidator,     name: 'schemaValidator',     scope: 'singleton',
-    properties: [{ name: 'applications', path: 'applications' }] },
-  { Reference: UserRepository, name: 'userRepository', scope: 'singleton' },
-  { Reference: AuthService,    name: 'authService',    scope: 'singleton',
-    properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
-  // ↓ MUST come before AppSyncController and AuthController
-  { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
-    properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
-  { Reference: AppSyncController, name: 'appSyncController', scope: 'singleton' },
-  { Reference: AuthController,    name: 'authController',    scope: 'singleton' },
-]);
-```
-
-**Config:**
-```
-auth.jwt.secret = <your-secret-at-least-32-chars>
-```
-
-### Apple Sign In
-
-Apple requires a private key (ES256) for its JWT client secret. Pass the PEM-encoded key in the provider config:
-
-```js
-import { AppleProvider } from '@alt-javascript/data-api-auth-core';
-const apple = new AppleProvider({
-  clientId:    'com.example.app',
-  teamId:      'YOURTEAMID',
-  keyId:       'YOURKEYID',
-  privateKey:  process.env.APPLE_PRIVATE_KEY_PEM,  // PEM string
-  redirectUri: 'https://example.com/auth/apple/callback',
-});
-```
-
-`pemToDer()` is called internally — you provide a PEM string, arctic handles the rest.
-
-### How to run auth example
-
-```bash
-node packages/example-auth/run.js
-```
-
-Expected output includes:
-```
-  ✓ First login → new UUID assigned
-  ✓ GET /auth/me → identity confirmed
-  ✓ POST /todo/sync → authenticated request succeeds
-  ✓ Rolling refresh → X-Auth-Token emitted, iat_session preserved
-  ✓ Provider link → second provider added, UUID unchanged
-  ✓ Provider unlink → first provider removed
-  ✓ Last provider protection → 409 on unlink attempt
-  ✓ Expired token → 401 with reason=idle
-```
+Sessions are stateless HS256 JWTs. Idle TTL: 3 days. Hard TTL: 7 days. Rolling refresh via `X-Auth-Token` response header when idle for more than 1 hour.
 
 ---
 
@@ -508,12 +322,18 @@ Expected output includes:
 
 | Milestone | Status | Description |
 |---|---|---|
-| M001 | ✅ Complete | Sync engine, HLC, field-level merge, Hono server, example |
-| M002 | ✅ Complete | OAuth identity: Google, Microsoft, Apple, GitHub → UUID |
-| M003 | ✅ Complete | Application-scoped sync, text auto-merge, JSON Schema validation |
-| M004 | ✅ Complete | Organisation tenancy — app-agnostic orgs, membership, role management, X-Org-Id header sync |
-| M005 | ✅ Complete | Deep nested document support — dot-path fieldRevs and recursive field-level merge |
-| M006 | ✅ Complete | Planner schema, application config, and isomorphic ESM bundle |
-| M007 | ✅ Complete | Data model, DocIndex, sharing design, OpenAPI spec, and integration guide authoring |
-| M008 | ✅ Complete | ACL enforcement, search, export, and hard deletion |
-| M009 | ✅ Complete | SyncClient (isomorphic, browser-ready), ADRs, and full documentation wiring |
+| M001 | ✅ | Sync engine, HLC, field-level merge, Hono server, example |
+| M002 | ✅ | OAuth identity: Google, Microsoft, Apple, GitHub → UUID |
+| M003 | ✅ | Application-scoped sync, text auto-merge, JSON Schema validation |
+| M004 | ✅ | Organisation tenancy — orgs, membership, roles, X-Org-Id header sync |
+| M005 | ✅ | Deep nested document support — dot-path fieldRevs and recursive merge |
+| M006 | ✅ | Planner schema, application config, and isomorphic ESM bundle |
+| M007 | ✅ | Data model, DocIndex, sharing design, OpenAPI spec, integration guides |
+| M008 | ✅ | ACL enforcement, search, export, and hard deletion |
+| M009 | ✅ | SyncClient (isomorphic, browser-ready), ADRs, and full documentation |
+
+---
+
+## License
+
+MIT

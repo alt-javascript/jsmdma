@@ -31,7 +31,7 @@
  *   this.syncRepository — SyncRepository instance
  *   this.logger         — optional logger
  */
-import { HLC, textMerge } from '@alt-javascript/data-api-core';
+import { HLC, textMerge } from '@alt-javascript/jsmdma-core';
 import { namespaceKey } from './namespaceKey.js';
 
 export default class SyncService {

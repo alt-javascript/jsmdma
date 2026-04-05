@@ -33,11 +33,11 @@ import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
 import {
   SyncRepository, SyncService, ExportService,
   ApplicationRegistry, SchemaValidator, DocumentIndexRepository,
-} from '@alt-javascript/data-api-server';
-import { AuthMiddlewareRegistrar } from '@alt-javascript/data-api-auth-hono';
-import { UserRepository, OrgRepository, OrgService } from '@alt-javascript/data-api-auth-server';
-import { JwtSession } from '@alt-javascript/data-api-auth-core';
-import { HLC } from '@alt-javascript/data-api-core';
+} from '@alt-javascript/jsmdma-server';
+import { AuthMiddlewareRegistrar } from '@alt-javascript/jsmdma-auth-hono';
+import { UserRepository, OrgRepository, OrgService } from '@alt-javascript/jsmdma-auth-server';
+import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
+import { HLC } from '@alt-javascript/jsmdma-core';
 import AppSyncController from '../AppSyncController.js';
 import ExportController  from '../ExportController.js';
 

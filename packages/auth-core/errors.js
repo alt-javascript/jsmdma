@@ -1,5 +1,5 @@
 /**
- * errors.js — Typed error classes for data-api auth
+ * errors.js — Typed error classes for jsmdma auth
  *
  * Using typed errors allows callers to distinguish between:
  *   - Invalid/tampered tokens

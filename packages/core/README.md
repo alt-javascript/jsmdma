@@ -1,17 +1,23 @@
-# @alt-javascript/data-api-core
+# @alt-javascript/jsmdma-core
 
-Isomorphic offline-first sync state for the data-api ecosystem. Zero Node.js dependencies — runs in browsers, Node.js, and edge runtimes.
+[![Language](https://img.shields.io/badge/language-JavaScript-yellow.svg)](https://developer.mozilla.org/en-US/docs/Web/JavaScript)
+[![npm version](https://img.shields.io/npm/v/%40alt-javascript%2Fjsmdma-core)](https://www.npmjs.com/package/@alt-javascript/jsmdma-core)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
+Isomorphic offline-first sync state for the jsmdma ecosystem. Zero Node.js dependencies — runs in browsers, Node.js, and edge runtimes.
+
+**Part of the [@alt-javascript/jsmdma](https://github.com/alt-javascript/jsmdma) monorepo.**
 
 ## Install
 
 ```bash
-npm install @alt-javascript/data-api-core
+npm install @alt-javascript/jsmdma-core
 ```
 
 ## Quick Example
 
 ```js
-import { SyncClient } from '@alt-javascript/data-api-core';
+import { SyncClient } from '@alt-javascript/jsmdma-core';
 
 // Restore from storage or start fresh
 const stored = localStorage.getItem('sync-snapshot');
@@ -42,100 +48,42 @@ localStorage.setItem('sync-snapshot', JSON.stringify(client.getSnapshot()));
 
 ## API: SyncClient
 
-### `new SyncClient(nodeId, wallMs?)`
+| Method | Description |
+|---|---|
+| `new SyncClient(nodeId, wallMs?)` | Create a new client. `nodeId` is a stable UUID or device ID. |
+| `client.edit(key, doc, wallMs?)` | Record a local edit. Diffs against last-synced snapshot, stamps changed fields with current HLC. Chainable. |
+| `client.getChanges()` | Return all pending local changes as a sync payload array. |
+| `client.sync(serverResponse, wallMs?)` | Apply a server sync response. Advances `baseClock`. Returns `{ serverChanges, conflicts }`. |
+| `client.prune()` | Reset the client to a clean slate — clears all local docs, resets `baseClock`. Chainable. |
+| `client.shouldPrune(thresholdMs)` | Return `true` if the last sync was more than `thresholdMs` ago. |
+| `client.getSnapshot()` | Return a serialisable plain-object snapshot of all client state. |
+| `SyncClient.fromSnapshot(snapshot)` | Restore a client from a snapshot. Returns `null` if snapshot is null — use the `?? new SyncClient(nodeId)` guard. |
 
-Create a new client with a stable unique node identifier (UUID or device ID). `wallMs` is an optional initial wall-clock time (defaults to `0`).
+### Important: use `client.baseClock` as `clientClock`
 
-```js
-const client = new SyncClient('device-abc');
-```
-
-### `client.edit(key, doc, wallMs?)`
-
-Record a local edit for the document at `key`. Ticks the HLC, diffs against the last-synced snapshot, and stamps changed fields with the new clock. Chainable.
-
-```js
-client.edit('todos/1', { title: 'Buy milk', done: false });
-```
-
-### `client.getChanges()`
-
-Return all pending local changes as a sync payload array. Each entry includes `key`, `doc`, `fieldRevs`, and `baseClock`.
+`baseClock` is the last `serverClock` received — the shared anchor that tells the server "return changes newer than my last confirmed sync." Sending `client.clock` (the local tick counter) instead will produce incorrect results.
 
 ```js
-const changes = client.getChanges();
-// [{ key: 'todos/1', doc: {...}, fieldRevs: {...}, baseClock: '000...' }]
-```
-
-### `client.sync(serverResponse, wallMs?)`
-
-Apply a server sync response, merging remote changes with local state. Advances `baseClock` to `serverClock`. Returns `{ serverChanges, conflicts }`.
-
-```js
-const { conflicts } = client.sync(serverResponse);
-```
-
-### `client.prune()`
-
-Reset the client to a clean slate — clears all local docs and resets `baseClock`. Chainable. Useful after a full server re-download or storage quota pressure. Takes no arguments.
-
-```js
-client.prune();
-```
-
-### `client.shouldPrune(thresholdMs)`
-
-Return `true` if the client has synced at least once and the last sync was more than `thresholdMs` milliseconds ago. Takes one argument (the threshold).
-
-```js
-if (client.shouldPrune(7 * 24 * 60 * 60 * 1000)) {
-  client.prune();
-}
-```
-
-### `client.getSnapshot()`
-
-Return a plain-object snapshot of all client state suitable for serialisation and later restoration.
-
-```js
-const snapshot = client.getSnapshot();
-localStorage.setItem('sync-snapshot', JSON.stringify(snapshot));
-```
-
-### `SyncClient.fromSnapshot(snapshot)`
-
-Restore a `SyncClient` from a previously serialised snapshot. **`fromSnapshot(null)` throws** — always use the null guard pattern:
-
-```js
-const client = SyncClient.fromSnapshot(snapshot) ?? new SyncClient(nodeId);
+const payload = {
+  clientClock: client.baseClock,  // ✓ correct
+  changes: client.getChanges(),
+};
 ```
 
 ## API: HLC
 
 Hybrid Logical Clock — encodes as a lexicographically orderable hex string usable as a NoSQL sort key.
 
-### `HLC.create(nodeId, wallMs?)`
-
-Create a new HLC string for a node, optionally seeded with a wall-clock time.
-
-### `HLC.tick(clock, wallMs?)`
-
-Advance a local clock for a send or local event.
-
-### `HLC.recv(local, remote, wallMs?)`
-
-Advance the local clock upon receiving a remote message — advances beyond both clocks.
-
-### `HLC.zero()`
-
-Return the minimum HLC string (`'000...000-000000-00000000'`). Means "I have seen nothing yet."
-
-### `HLC.compare(a, b)`
-
-Compare two HLC strings. Returns `-1`, `0`, or `1`.
+| Method | Description |
+|---|---|
+| `HLC.create(nodeId, wallMs?)` | Create a new HLC string. |
+| `HLC.tick(clock, wallMs?)` | Advance a local clock for a send or local event. |
+| `HLC.recv(local, remote, wallMs?)` | Advance the local clock upon receiving a remote message. |
+| `HLC.zero()` | Return the minimum HLC string — means "I have seen nothing yet." |
+| `HLC.compare(a, b)` | Compare two HLC strings. Returns `-1`, `0`, or `1`. |
 
 ```js
-import { HLC } from '@alt-javascript/data-api-core';
+import { HLC } from '@alt-javascript/jsmdma-core';
 
 const clock = HLC.create('device-abc', Date.now());
 const next  = HLC.tick(clock, Date.now());
@@ -157,9 +105,13 @@ const next  = HLC.tick(clock, Date.now());
 npm run build
 ```
 
-Produces `dist/data-api-core.esm.js` — less than 30 kB, no external dependencies. Suitable for direct `<script type="module">` use or bundler import.
+Produces `dist/jsmdma-core.esm.js` — under 30 kB, no external dependencies. Suitable for direct `<script type="module">` use or bundler import.
 
 ## Further Reading
 
-- [Client Integration Guide](../../docs/client-integration.md) — full offline-first sync loop walkthrough
-- [Sync Protocol Reference](../../docs/sync-protocol.md) — wire format, clock semantics, and server contract
+- [Client Integration Guide](../../docs/client-integration.md)
+- [Sync Protocol Reference](../../docs/sync-protocol.md)
+
+## License
+
+MIT

@@ -6,7 +6,7 @@
 
 ## Context
 
-data-api exposes export endpoints for user accounts (`GET /account/export`) and organisations (`GET /orgs/:orgId/export`). The system needs to decide the response format for these exports.
+jsmdma exposes export endpoints for user accounts (`GET /account/export`) and organisations (`GET /orgs/:orgId/export`). The system needs to decide the response format for these exports.
 
 The main alternatives considered were:
 

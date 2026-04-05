@@ -25,11 +25,11 @@ import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
 import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
-import { SyncRepository, SyncService } from '@alt-javascript/data-api-server';
-import { SyncController } from '@alt-javascript/data-api-hono';
-import { UserRepository, AuthService } from '@alt-javascript/data-api-auth-server';
-import { AuthController, AuthMiddlewareRegistrar } from '@alt-javascript/data-api-auth-hono';
-import { JwtSession } from '@alt-javascript/data-api-auth-core';
+import { SyncRepository, SyncService } from '@alt-javascript/jsmdma-server';
+import { SyncController } from '@alt-javascript/jsmdma-hono';
+import { UserRepository, AuthService } from '@alt-javascript/jsmdma-auth-server';
+import { AuthController, AuthMiddlewareRegistrar } from '@alt-javascript/jsmdma-auth-hono';
+import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 import { SignJWT } from 'jose';
 
 // ── constants ─────────────────────────────────────────────────────────────────
@@ -142,7 +142,7 @@ async function login(app, providerName) {
 // ── main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
-  banner('data-api — Auth Lifecycle Example');
+  banner('jsmdma — Auth Lifecycle Example');
 
   const { app } = await buildContext({
     github: new MockProvider('gh-user-1', 'alice@github.com'),

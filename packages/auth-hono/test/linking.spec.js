@@ -9,10 +9,10 @@ import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
 import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
-import { SyncRepository, SyncService } from '@alt-javascript/data-api-server';
-import { SyncController } from '@alt-javascript/data-api-hono';
-import { UserRepository, AuthService } from '@alt-javascript/data-api-auth-server';
-import { JwtSession } from '@alt-javascript/data-api-auth-core';
+import { SyncRepository, SyncService } from '@alt-javascript/jsmdma-server';
+import { SyncController } from '@alt-javascript/jsmdma-hono';
+import { UserRepository, AuthService } from '@alt-javascript/jsmdma-auth-server';
+import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 import AuthController from '../AuthController.js';
 import AuthMiddlewareRegistrar from '../AuthMiddlewareRegistrar.js';
 

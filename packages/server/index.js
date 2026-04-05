@@ -1,5 +1,5 @@
 /**
- * index.js — Public exports for @alt-javascript/data-api-server
+ * index.js — Public exports for @alt-javascript/jsmdma-server
  */
 
 export { default as SyncRepository } from './SyncRepository.js';

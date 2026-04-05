@@ -1,7 +1,7 @@
 openapi: 3.1.0
 
 info:
-  title: data-api
+  title: jsmdma
   version: 1.0.0
   description: |
     Offline-first, bidirectional data sync API built on the alt-javascript/boot ecosystem.

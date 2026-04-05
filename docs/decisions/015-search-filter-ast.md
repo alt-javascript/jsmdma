@@ -6,7 +6,7 @@
 
 ## Context
 
-data-api needs a search endpoint that allows clients to query documents within an application. The system needs to decide the shape of the query interface.
+jsmdma needs a search endpoint that allows clients to query documents within an application. The system needs to decide the shape of the query interface.
 
 The main alternatives considered were:
 

@@ -6,7 +6,7 @@
 
 ## Context
 
-data-api must support account and organisation deletion. The system needs to decide the deletion model: hard delete, soft delete with tombstone, or async sweep.
+jsmdma must support account and organisation deletion. The system needs to decide the deletion model: hard delete, soft delete with tombstone, or async sweep.
 
 The main alternatives considered were:
 

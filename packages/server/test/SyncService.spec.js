@@ -7,7 +7,7 @@
 import { assert } from 'chai';
 import '@alt-javascript/jsnosqlc-memory';
 import { DriverManager } from '@alt-javascript/jsnosqlc-core';
-import { HLC } from '@alt-javascript/data-api-core';
+import { HLC } from '@alt-javascript/jsmdma-core';
 import SyncRepository from '../SyncRepository.js';
 import SyncService from '../SyncService.js';
 import DocumentIndexRepository from '../DocumentIndexRepository.js';

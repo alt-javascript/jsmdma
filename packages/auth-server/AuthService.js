@@ -15,7 +15,7 @@
  * In tests, inject dependencies directly via the constructor or property assignment.
  */
 import { generateState, generateCodeVerifier } from 'arctic';
-import { JwtSession, InvalidStateError } from '@alt-javascript/data-api-auth-core';
+import { JwtSession, InvalidStateError } from '@alt-javascript/jsmdma-auth-core';
 
 export default class AuthService {
   constructor() {

@@ -1,5 +1,5 @@
 /**
- * index.js — Public exports for @alt-javascript/data-api-auth-hono
+ * index.js — Public exports for @alt-javascript/jsmdma-auth-hono
  */
 
 export { authMiddleware, getUser } from './authMiddleware.js';

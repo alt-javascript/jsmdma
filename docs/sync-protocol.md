@@ -1,6 +1,6 @@
 # Sync Protocol
 
-The data-api bidirectional sync protocol lets any number of clients (browser tabs, mobile devices, Node.js processes) maintain local document copies and reconcile changes with a central server. Clients can work fully offline; conflicts are resolved automatically using field-level revision tracking.
+The jsmdma bidirectional sync protocol lets any number of clients (browser tabs, mobile devices, Node.js processes) maintain local document copies and reconcile changes with a central server. Clients can work fully offline; conflicts are resolved automatically using field-level revision tracking.
 
 ---
 

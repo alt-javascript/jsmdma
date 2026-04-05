@@ -1,17 +1,18 @@
 {
-  "name": "@alt-javascript/data-api-core",
-  "version": "0.1.0",
-  "description": "Isomorphic core for data-api: HLC revision clock, field-level diff, and merge engine",
+  "name": "@alt-javascript/jsmdma-core",
+  "version": "1.0.0",
+  "description": "Isomorphic core for jsmdma: HLC revision clock, field-level diff, and merge engine",
   "type": "module",
   "main": "index.js",
   "exports": {
     ".": "./index.js"
   },
   "scripts": {
-    "build": "esbuild index.js --bundle --format=esm --outfile=dist/data-api-core.esm.js",
+    "build": "esbuild index.js --bundle --format=esm --outfile=dist/jsmdma-core.esm.js",
     "test": "mocha --recursive test/**/*.spec.js"
   },
   "keywords": [
+    "jsmdma",
     "alt-javascript",
     "sync",
     "hlc",
@@ -19,6 +20,16 @@
     "offline-first",
     "isomorphic"
   ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "homepage": "https://github.com/alt-javascript/jsmdma/tree/main/packages/core#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alt-javascript/jsmdma",
+    "directory": "packages/core"
+  },
   "devDependencies": {
     "chai": "^4.3.7",
     "esbuild": "^0.25.0",
@@ -29,11 +40,6 @@
   "contributors": [
     "Claude (Anthropic)"
   ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/alt-javascript/data-api.git",
-    "directory": "packages/core"
-  },
   "engines": {
     "node": ">=20"
   }

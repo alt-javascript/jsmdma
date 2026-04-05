@@ -20,7 +20,7 @@
  *   this.applicationRegistry     — ApplicationRegistry instance
  *   this.logger                  — optional logger
  */
-import { HLC } from '@alt-javascript/data-api-core';
+import { HLC } from '@alt-javascript/jsmdma-core';
 import { namespaceKey } from './namespaceKey.js';
 
 export default class DeletionService {

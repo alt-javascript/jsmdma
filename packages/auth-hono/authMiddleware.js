@@ -2,7 +2,7 @@
  * authMiddleware.js — Hono JWT auth middleware factory
  *
  * Usage:
- *   import { authMiddleware } from '@alt-javascript/data-api-auth-hono';
+ *   import { authMiddleware } from '@alt-javascript/jsmdma-auth-hono';
  *   app.use('/protected/*', authMiddleware(jwtSecret));
  *
  * On success: attaches the verified JWT payload to c.set('user', payload).
@@ -11,7 +11,7 @@
  *
  * On failure: returns 401 JSON with a typed error body.
  */
-import { JwtSession, InvalidTokenError, IdleExpiredError, HardExpiredError } from '@alt-javascript/data-api-auth-core';
+import { JwtSession, InvalidTokenError, IdleExpiredError, HardExpiredError } from '@alt-javascript/jsmdma-auth-core';
 
 /**
  * Create a JWT auth middleware for Hono.

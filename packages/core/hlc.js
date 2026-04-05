@@ -1,5 +1,5 @@
 /**
- * hlc.js — Hybrid Logical Clock (HLC) for data-api
+ * hlc.js — Hybrid Logical Clock (HLC) for jsmdma
  *
  * Isomorphic: zero Node-specific imports. Runs in browser, Node, and edge runtimes.
  *

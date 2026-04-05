@@ -1,6 +1,6 @@
 {
-  "name": "@alt-javascript/data-api-example",
-  "version": "0.1.0",
+  "name": "@alt-javascript/jsmdma-example",
+  "version": "1.0.0",
   "description": "Offline-first sync example: two clients diverge offline, sync, converge",
   "type": "module",
   "scripts": {
@@ -12,11 +12,11 @@
     "@alt-javascript/boot-jsnosqlc": "3.0.7",
     "@alt-javascript/cdi": "3.0.7",
     "@alt-javascript/config": "3.0.7",
-    "@alt-javascript/data-api-core": "*",
-    "@alt-javascript/data-api-hono": "*",
-    "@alt-javascript/data-api-server": "*",
-    "@alt-javascript/data-api-auth-core": "*",
-    "@alt-javascript/data-api-auth-hono": "*",
+    "@alt-javascript/jsmdma-core": "*",
+    "@alt-javascript/jsmdma-hono": "*",
+    "@alt-javascript/jsmdma-server": "*",
+    "@alt-javascript/jsmdma-auth-core": "*",
+    "@alt-javascript/jsmdma-auth-hono": "*",
     "@alt-javascript/jsnosqlc-memory": "^1.0.1"
   },
   "private": true,

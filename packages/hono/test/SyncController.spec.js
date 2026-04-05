@@ -11,8 +11,8 @@ import { ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
 import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
-import { SyncRepository, SyncService } from '@alt-javascript/data-api-server';
-import { HLC } from '@alt-javascript/data-api-core';
+import { SyncRepository, SyncService } from '@alt-javascript/jsmdma-server';
+import { HLC } from '@alt-javascript/jsmdma-core';
 import SyncController from '../SyncController.js';
 
 // ── helpers ──────────────────────────────────────────────────────────────────

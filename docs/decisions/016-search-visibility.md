@@ -6,7 +6,7 @@
 
 ## Context
 
-data-api has two distinct mechanisms for making a document accessible beyond the owner:
+jsmdma has two distinct mechanisms for making a document accessible beyond the owner:
 
 1. **`visibility: 'public'`** — the document is visible to any authenticated user.
 2. **Share token** — a UUID token that grants direct-link access to a specific document. The document's visibility may be `private` or `shared`, not `public`.
