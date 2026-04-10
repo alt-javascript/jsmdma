@@ -16,12 +16,6 @@ const mockStorage = {
   key:        (n) => Object.keys(_store)[n] ?? null,
   get length() { return Object.keys(_store).length; },
 };
-before(() => { global.localStorage = mockStorage; });
-afterEach(() => {
-  mockStorage.clear();
-  delete global.fetch;
-});
-
 const DOC_ID  = 'plan-uuid-1';
 const SYNC_URL = 'http://127.0.0.1:8081/year-planner/sync';
 const AUTH_HDR = { Authorization: 'Bearer test-jwt' };
@@ -49,6 +43,12 @@ function mockSyncResponse(serverChanges = [], serverClock = null) {
 }
 
 describe('SyncClientAdapter', () => {
+  // Scoped setup: re-assert mock before each test, clear after.
+  beforeEach(() => { global.localStorage = mockStorage; });
+  afterEach(() => {
+    mockStorage.clear();
+    delete global.fetch;
+  });
   describe('markEdited()', () => {
     it('stores an HLC timestamp for the given dotPath', () => {
       const { adapter } = makeAdapter();

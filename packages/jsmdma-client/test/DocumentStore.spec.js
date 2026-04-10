@@ -17,8 +17,6 @@ const mockStorage = {
   key:        (n) => Object.keys(_store)[n] ?? null,
   get length() { return Object.keys(_store).length; },
 };
-before(() => { global.localStorage = mockStorage; });
-afterEach(() => { mockStorage.clear(); });
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 function makeStore(opts = {}) {
@@ -27,6 +25,10 @@ function makeStore(opts = {}) {
 
 // ── tests ──────────────────────────────────────────────────────────────────────
 describe('DocumentStore', () => {
+  // Scoped setup: re-assert mock before each test, clear after.
+  beforeEach(() => { global.localStorage = mockStorage; });
+  afterEach(() => { mockStorage.clear(); });
+
   it('set() and get() round-trip a document', () => {
     const store = makeStore();
     store.set('uuid-1', { name: 'Test', year: 2026 });
