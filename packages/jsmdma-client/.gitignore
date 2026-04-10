@@ -1,0 +1,2 @@
+# Allow dist/ for this package — it's a browser-distributable bundle
+!dist/
