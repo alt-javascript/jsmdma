@@ -27,8 +27,7 @@ import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
 import { SyncRepository, SyncService } from '@alt-javascript/jsmdma-server';
 import { SyncController } from '@alt-javascript/jsmdma-hono';
-import { UserRepository, AuthService } from '@alt-javascript/jsmdma-auth-server';
-import { AuthController, AuthMiddlewareRegistrar } from '@alt-javascript/jsmdma-auth-hono';
+import { authHonoStarter } from '@alt-javascript/jsmdma-auth-hono';
 import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 import { SignJWT } from 'jose';
 
@@ -104,20 +103,16 @@ async function buildContext(providers) {
     'logging': { level: { ROOT: 'error' } },
     'server':  { port: 0 },
     'auth':    { jwt: { secret: JWT_SECRET } },
+    'orgs':    { registerable: false },
   });
 
   const context = new Context([
     ...honoStarter(),
     ...jsnosqlcAutoConfiguration(),
-    { Reference: SyncRepository,         name: 'syncRepository',         scope: 'singleton' },
-    { Reference: SyncService,            name: 'syncService',             scope: 'singleton' },
-    { Reference: UserRepository,         name: 'userRepository',          scope: 'singleton' },
-    { Reference: AuthService,            name: 'authService',             scope: 'singleton',
-      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
-    { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
-      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
-    { Reference: SyncController,         name: 'syncController',          scope: 'singleton' },
-    { Reference: AuthController,         name: 'authController',          scope: 'singleton' },
+    { Reference: SyncRepository, name: 'syncRepository', scope: 'singleton' },
+    { Reference: SyncService,    name: 'syncService',    scope: 'singleton' },
+    ...authHonoStarter(),
+    { Reference: SyncController, name: 'syncController', scope: 'singleton' },
   ]);
 
   const appCtx = new ApplicationContext({ contexts: [context], config });
