@@ -62,7 +62,7 @@ export default class GoogleIdTokenMiddlewareRegistrar {
         logger?.debug?.(`[GoogleIdTokenMiddlewareRegistrar] verified Google user sub=${claims.sub}`);
         await next();
       } catch (err) {
-        logger?.debug?.(`[GoogleIdTokenMiddlewareRegistrar] invalid token: ${err.message}`);
+        console.warn(`[GoogleIdTokenMiddlewareRegistrar] token rejected: ${err.message}`);
         return c.json({ error: 'Unauthorized' }, 401);
       }
     };
