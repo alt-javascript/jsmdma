@@ -8,7 +8,7 @@
     ".": "./index.js"
   },
   "scripts": {
-    "build": "esbuild index.js --bundle --format=esm --outfile=dist/jsmdma-auth-client.esm.js --external:jose",
+    "build": "esbuild index.js --bundle --format=esm --outfile=dist/jsmdma-auth-client.esm.js",
     "test": "mocha --recursive test/**/*.spec.js"
   },
   "dependencies": {
