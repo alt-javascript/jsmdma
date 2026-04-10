@@ -1,0 +1,2 @@
+# Allow dist/ to be tracked for browser bundles
+!dist/

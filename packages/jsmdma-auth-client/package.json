@@ -1,0 +1,27 @@
+{
+  "name": "@alt-javascript/jsmdma-auth-client",
+  "version": "1.0.0",
+  "description": "Browser-side identity and session management for jsmdma applications",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "scripts": {
+    "build": "esbuild index.js --bundle --format=esm --outfile=dist/jsmdma-auth-client.esm.js --external:jose",
+    "test": "mocha --recursive test/**/*.spec.js"
+  },
+  "dependencies": {
+    "jose": "^5.9.6"
+  },
+  "devDependencies": {
+    "@alt-javascript/jsmdma-auth-core": "*",
+    "chai": "^4.3.7",
+    "esbuild": "^0.25.0",
+    "mocha": "^11.7.5"
+  },
+  "license": "MIT",
+  "author": "Craig Parravicini",
+  "contributors": ["Claude (Anthropic)"],
+  "engines": { "node": ">=20" }
+}
