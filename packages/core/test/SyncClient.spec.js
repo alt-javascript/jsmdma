@@ -37,6 +37,65 @@ function makeServerDoc(key, appFields, fieldRevs = {}) {
   return { _key: key, _fieldRevs: fieldRevs, ...appFields };
 }
 
+/**
+ * Minimal mock server: receives changes from one client, stores them,
+ * and returns all known docs as serverChanges to any syncing client.
+ * Uses a SyncClient internally to demonstrate server-as-client symmetry.
+ *
+ * The server merges incoming client changes using HLC-wins semantics and
+ * stores the winning fieldRev per field so that subsequent clients receive
+ * authoritative revision vectors for correct conflict resolution.
+ */
+function createMockServer(nodeId = 'server') {
+  const server = new SyncClient(nodeId, 0);
+  let serverClock = HLC.tick(HLC.zero(), 1);
+
+  return {
+    sync(clientChanges, wallMs = Date.now()) {
+      for (const change of clientChanges) {
+        const existing = server.docs[change.key];
+        if (!existing) {
+          // New doc — store with client's fieldRevs intact
+          server.docs[change.key] = {
+            doc: change.doc,
+            fieldRevs: { ...change.fieldRevs },
+            baseSnapshot: change.doc,
+          };
+        } else {
+          // Merge: for each field, the higher HLC wins; store the winning fieldRev
+          const mergedDoc = { ...existing.doc };
+          const mergedRevs = { ...existing.fieldRevs };
+          for (const field of new Set([
+            ...Object.keys(existing.doc),
+            ...Object.keys(change.doc),
+          ])) {
+            if (field.startsWith('_')) continue;
+            const serverRev = existing.fieldRevs[field] ?? HLC.zero();
+            const clientRev = change.fieldRevs[field] ?? HLC.zero();
+            if (HLC.compare(clientRev, serverRev) > 0) {
+              mergedDoc[field] = change.doc[field];
+              mergedRevs[field] = clientRev;
+            }
+          }
+          server.docs[change.key] = {
+            doc: mergedDoc,
+            fieldRevs: mergedRevs,
+            baseSnapshot: mergedDoc,
+          };
+        }
+      }
+      serverClock = HLC.tick(serverClock, wallMs);
+      const serverChanges = Object.entries(server.docs).map(([key, entry]) => ({
+        _key: key,
+        _fieldRevs: entry.fieldRevs,
+        ...entry.doc,
+      }));
+      return { serverClock, serverChanges };
+    },
+    get docs() { return server.docs; },
+  };
+}
+
 // ─── describe SyncClient ──────────────────────────────────────────────────────
 
 describe('SyncClient', () => {
@@ -583,6 +642,147 @@ describe('SyncClient', () => {
       const parsed = JSON.parse(json);
       assert.deepEqual(parsed, snap);
     });
+  });
+
+  // ── two-client bidirectional sync ────────────────────────────────────────────
+
+  describe('two-client bidirectional sync', () => {
+
+    it('two clients editing different fields converge after mutual sync', () => {
+      const mockServer = createMockServer();
+      const clientA = new SyncClient('device-a', 1000);
+      const clientB = new SyncClient('device-b', 1000);
+
+      // Seed an initial doc via clientA so both clients share a common baseSnapshot
+      clientA.edit('doc/1', { title: 'Original', note: 'Original' }, 1000);
+      const respSeed = mockServer.sync(clientA.getChanges(), 2000);
+      clientA.sync(respSeed, 2000);
+
+      // clientB pulls the initial doc — now both have the same baseSnapshot
+      const respBSeed = mockServer.sync([], 2000);
+      clientB.sync(respBSeed, 2000);
+
+      // Now each client edits only their own field (diff against baseSnapshot
+      // means only changed fields get a new fieldRev)
+      clientA.edit('doc/1', { title: 'A title', note: 'Original' }, 3000);
+      clientB.edit('doc/1', { title: 'Original', note: 'B note' }, 4000);
+
+      // Both push their changes to the server
+      const respA = mockServer.sync(clientA.getChanges(), 5000);
+      clientA.sync(respA, 5000);
+
+      const respB = mockServer.sync(clientB.getChanges(), 6000);
+      clientB.sync(respB, 6000);
+
+      // Client A syncs again to receive B's note
+      const respA2 = mockServer.sync(clientA.getChanges(), 7000);
+      clientA.sync(respA2, 7000);
+
+      assert.equal(clientA.docs['doc/1'].doc.title, 'A title');
+      assert.equal(clientA.docs['doc/1'].doc.note, 'B note');
+      assert.equal(clientB.docs['doc/1'].doc.title, 'A title');
+      assert.equal(clientB.docs['doc/1'].doc.note, 'B note');
+    });
+
+    it('two clients editing the same field — higher HLC wins, both converge', () => {
+      const mockServer = createMockServer();
+      const clientA = new SyncClient('device-a', 1000);
+      const clientB = new SyncClient('device-b', 9000);
+
+      clientA.edit('doc/1', { title: 'A wins?' }, 1000);
+      clientB.edit('doc/1', { title: 'B wins' }, 9000);
+
+      mockServer.sync(clientA.getChanges(), 10000);
+      const respB = mockServer.sync(clientB.getChanges(), 10000);
+      clientB.sync(respB, 10000);
+
+      const respA = mockServer.sync(clientA.getChanges(), 11000);
+      clientA.sync(respA, 11000);
+
+      const respB2 = mockServer.sync(clientB.getChanges(), 12000);
+      clientB.sync(respB2, 12000);
+
+      assert.equal(clientA.docs['doc/1'].doc.title, 'B wins');
+      assert.equal(clientB.docs['doc/1'].doc.title, 'B wins');
+    });
+
+    it('offline client catches up in a single sync after reconnect', () => {
+      const mockServer = createMockServer();
+      const clientA = new SyncClient('device-a', 1000);
+      const clientB = new SyncClient('device-b', 2000);
+
+      // Client B makes 3 edits while offline
+      clientB.edit('doc/1', { v: 1 }, 2000);
+      clientB.edit('doc/1', { v: 2 }, 3000);
+      clientB.edit('doc/1', { v: 3 }, 4000);
+
+      // Client A syncs normally
+      clientA.edit('doc/1', { v: 0, extra: 'from-a' }, 1000);
+      const respA = mockServer.sync(clientA.getChanges(), 5000);
+      clientA.sync(respA, 5000);
+
+      // Client B reconnects — single sync
+      const respB = mockServer.sync(clientB.getChanges(), 6000);
+      clientB.sync(respB, 6000);
+
+      // Client A gets B's changes
+      const respA2 = mockServer.sync(clientA.getChanges(), 7000);
+      clientA.sync(respA2, 7000);
+
+      assert.equal(clientA.docs['doc/1'].doc.v, 3);
+      assert.equal(clientA.docs['doc/1'].doc.extra, 'from-a');
+      assert.equal(clientB.docs['doc/1'].doc.v, 3);
+      assert.equal(clientB.docs['doc/1'].doc.extra, 'from-a');
+    });
+
+    it('server-as-client symmetry: both sides use SyncClient, both converge to identical result', () => {
+      const side1 = new SyncClient('side-1', 1000);
+      const side2 = new SyncClient('side-2', 2000);
+
+      side1.edit('doc/1', { a: 1, b: 0 }, 1000);
+      side2.edit('doc/1', { a: 0, b: 2 }, 2000);
+
+      // side2 acts as server — receives side1's changes
+      const changes1 = side1.getChanges();
+      side2.sync({
+        serverClock: HLC.tick(HLC.zero(), 5000),
+        serverChanges: changes1.map(c => ({ _key: c.key, _fieldRevs: c.fieldRevs, ...c.doc })),
+      }, 5000);
+
+      // side1 acts as server — receives side2's merged changes
+      const changes2 = side2.getChanges();
+      side1.sync({
+        serverClock: HLC.tick(HLC.zero(), 6000),
+        serverChanges: changes2.map(c => ({ _key: c.key, _fieldRevs: c.fieldRevs, ...c.doc })),
+      }, 6000);
+
+      assert.deepEqual(
+        side1.docs['doc/1'].doc,
+        side2.docs['doc/1'].doc,
+        'Both sides must converge regardless of which is labelled server or client'
+      );
+    });
+
+    it('snapshot round-trip preserves sync ability across serialisation boundary', () => {
+      const mockServer = createMockServer();
+      const clientA = new SyncClient('device-a', 1000);
+
+      clientA.edit('doc/1', { title: 'Before snap' }, 1000);
+      const resp1 = mockServer.sync(clientA.getChanges(), 2000);
+      clientA.sync(resp1, 2000);
+
+      // Simulate tab close + reopen via JSON round-trip
+      const snap = JSON.parse(JSON.stringify(clientA.getSnapshot()));
+      const restored = SyncClient.fromSnapshot(snap);
+
+      restored.edit('doc/1', { title: 'After snap' }, 3000);
+      const resp2 = mockServer.sync(restored.getChanges(), 4000);
+      restored.sync(resp2, 4000);
+
+      assert.equal(restored.docs['doc/1'].doc.title, 'After snap');
+      assert.equal(mockServer.docs['doc/1'].doc.title, 'After snap');
+    });
+
   });
 
   // ── isomorphism audit ────────────────────────────────────────────────────────
