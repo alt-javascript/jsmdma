@@ -38,13 +38,13 @@ function makeServerDoc(key, appFields, fieldRevs = {}) {
 }
 
 /**
- * Minimal mock server: receives changes from one client, stores them,
- * and returns all known docs as serverChanges to any syncing client.
- * Uses a SyncClient internally to demonstrate server-as-client symmetry.
+ * Minimal mock server for integration tests.
  *
- * The server merges incoming client changes using HLC-wins semantics and
- * stores the winning fieldRev per field so that subsequent clients receive
- * authoritative revision vectors for correct conflict resolution.
+ * Stores all received docs in a SyncClient instance (namespace isolation).
+ * Merge logic is a direct field-by-field HLC winner selection — this keeps
+ * the helper focused and independent of SyncClient's own sync() path.
+ * Server-as-client symmetry is demonstrated by test 4, which uses two plain
+ * SyncClient instances with no mock intermediary.
  */
 function createMockServer(nodeId = 'server') {
   const server = new SyncClient(nodeId, 0);
@@ -644,6 +644,24 @@ describe('SyncClient', () => {
     });
   });
 
+  // ── isomorphism audit ────────────────────────────────────────────────────────
+
+  describe('isomorphism (no Node-specific imports)', () => {
+    const NODE_ONLY = [
+      'node:fs', 'node:path', 'node:crypto', 'node:process',
+      "'fs'", "'path'", "'crypto'",
+      '"fs"', '"path"', '"crypto"',
+      'Buffer.', 'process.env', '__dirname', '__filename', 'require(',
+    ];
+
+    for (const forbidden of NODE_ONLY) {
+      it(`does not import or use "${forbidden}"`, () => {
+        assert.notInclude(syncClientSource, forbidden,
+          `SyncClient.js must not contain "${forbidden}" — it must remain isomorphic`);
+      });
+    }
+  });
+
   // ── two-client bidirectional sync ────────────────────────────────────────────
 
   describe('two-client bidirectional sync', () => {
@@ -653,7 +671,8 @@ describe('SyncClient', () => {
       const clientA = new SyncClient('device-a', 1000);
       const clientB = new SyncClient('device-b', 1000);
 
-      // Seed an initial doc via clientA so both clients share a common baseSnapshot
+      // Seed a shared baseSnapshot so diff() only stamps the field the client actually changed.
+      // Without this, edit() would stamp ALL fields with a new fieldRev, causing unwanted conflicts.
       clientA.edit('doc/1', { title: 'Original', note: 'Original' }, 1000);
       const respSeed = mockServer.sync(clientA.getChanges(), 2000);
       clientA.sync(respSeed, 2000);
@@ -783,24 +802,6 @@ describe('SyncClient', () => {
       assert.equal(mockServer.docs['doc/1'].doc.title, 'After snap');
     });
 
-  });
-
-  // ── isomorphism audit ────────────────────────────────────────────────────────
-
-  describe('isomorphism (no Node-specific imports)', () => {
-    const NODE_ONLY = [
-      'node:fs', 'node:path', 'node:crypto', 'node:process',
-      "'fs'", "'path'", "'crypto'",
-      '"fs"', '"path"', '"crypto"',
-      'Buffer.', 'process.env', '__dirname', '__filename', 'require(',
-    ];
-
-    for (const forbidden of NODE_ONLY) {
-      it(`does not import or use "${forbidden}"`, () => {
-        assert.notInclude(syncClientSource, forbidden,
-          `SyncClient.js must not contain "${forbidden}" — it must remain isomorphic`);
-      });
-    }
   });
 
 });
