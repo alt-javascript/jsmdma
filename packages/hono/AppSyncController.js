@@ -128,6 +128,9 @@ export default class AppSyncController {
         }
       }
       if (validationErrors.length > 0) {
+        this.logger?.warn?.(
+          `[AppSyncController] schema validation failed app=${application} col=${collection} userId=${userId} errors=${JSON.stringify(validationErrors)}`,
+        );
         return { statusCode: 400, body: { error: 'Schema validation failed', details: validationErrors } };
       }
     }

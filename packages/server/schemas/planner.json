@@ -12,9 +12,11 @@
         "name":    { "type": "string", "minLength": 1, "maxLength": 64 },
         "year":    { "type": "integer", "minimum": 1900, "maximum": 2100 },
         "lang":    { "type": "string", "maxLength": 10 },
-        "theme":   { "type": "string", "enum": ["ink", "nordic"] },
+        "theme":   { "type": "string" },
         "dark":    { "type": "boolean" },
-        "created": { "type": "string" }
+        "uid":     {},
+        "userKey": { "type": "string" },
+        "created": { "type": ["string", "number"] }
       },
       "additionalProperties": false
     },
