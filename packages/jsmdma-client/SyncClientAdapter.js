@@ -1,9 +1,10 @@
 /**
- * SyncClientAdapter.js — localStorage-backed sync state management.
+ * SyncClientAdapter.js — localStorage-backed multi-document sync.
  *
  * Wraps the jsmdma HLC-based sync protocol with browser localStorage persistence.
+ * Syncs ALL sync-eligible documents in a single HTTP request.
  *
- * localStorage key patterns (configurable via options):
+ * localStorage key patterns:
  *   sync:<uuid>  — last server HLC clock (string)
  *   rev:<uuid>   — fieldRevs map { 'days.2026-03-28.tl': '<hlcString>', ... }
  *   base:<uuid>  — base snapshot (last known server state, for 3-way merge)
@@ -12,7 +13,7 @@ import { HLC, merge } from '@alt-javascript/jsmdma-core';
 
 export default class SyncClientAdapter {
   /**
-   * @param {import('./DocumentStore.js').default} documentStore
+   * @param {import('./SyncDocumentStore.js').default} syncDocumentStore
    * @param {{
    *   clockKey?: string,
    *   revKey?: string,
@@ -20,11 +21,12 @@ export default class SyncClientAdapter {
    *   collection?: string,
    * }} [options]
    */
-  constructor(documentStore, options = {}) {
-    this.documentStore = documentStore;
-    this.clockKey  = options.clockKey  ?? 'sync';
-    this.revKey    = options.revKey    ?? 'rev';
-    this.baseKey   = options.baseKey   ?? 'base';
+  constructor(syncDocumentStore, options = {}) {
+    this.syncDocumentStore = syncDocumentStore;
+    this.documentStore = syncDocumentStore; // alias for pruneAll iteration
+    this.clockKey   = options.clockKey  ?? 'sync';
+    this.revKey     = options.revKey    ?? 'rev';
+    this.baseKey    = options.baseKey   ?? 'base';
     this.collection = options.collection ?? 'documents';
   }
 
@@ -34,8 +36,7 @@ export default class SyncClientAdapter {
 
   /**
    * Tick HLC for a dot-path field on a document. Call on every user edit.
-   *
-   * @param {string} docId — document UUID
+   * @param {string} docId
    * @param {string} dotPath — e.g. 'days.2026-03-28.tl'
    */
   markEdited(docId, dotPath) {
@@ -49,24 +50,36 @@ export default class SyncClientAdapter {
   }
 
   /**
-   * POST to syncUrl with jsmdma payload, apply 3-way merge, persist result.
+   * Sync all documents owned by userId in a single HTTP request.
    *
-   * @param {string} docId
-   * @param {object} doc — current full document
+   * @param {string} userId — authenticated user UUID
    * @param {object} authHeaders — e.g. { Authorization: 'Bearer ...' }
    * @param {string} syncUrl — e.g. 'http://127.0.0.1:8081/year-planner/sync'
-   * @returns {Promise<object>} merged document
+   * @returns {Promise<Object<string, object>>} map of docId → merged document
    * @throws {{ status: number }} on HTTP error
    */
-  async sync(docId, doc, authHeaders, syncUrl) {
-    const clientClock = localStorage.getItem(this._syncKey(docId)) || HLC.zero();
-    const fieldRevs   = JSON.parse(localStorage.getItem(this._revKey(docId))  ?? '{}');
-    const base        = JSON.parse(localStorage.getItem(this._baseKey(docId)) ?? '{}');
+  async sync(userId, authHeaders, syncUrl) {
+    const syncableDocs = this.syncDocumentStore.listSyncable(userId);
+
+    // Build changes array — one entry per syncable doc
+    const changes = [];
+    let maxClientClock = HLC.zero();
+
+    for (const { uuid, doc } of syncableDocs) {
+      const clientClock = localStorage.getItem(this._syncKey(uuid)) || HLC.zero();
+      const fieldRevs   = JSON.parse(localStorage.getItem(this._revKey(uuid))  ?? '{}');
+
+      if (HLC.compare(clientClock, maxClientClock) > 0) {
+        maxClientClock = clientClock;
+      }
+
+      changes.push({ key: uuid, doc, fieldRevs, baseClock: clientClock });
+    }
 
     const payload = {
       collection: this.collection,
-      clientClock,
-      changes: [{ key: docId, doc, fieldRevs, baseClock: clientClock }],
+      clientClock: maxClientClock,
+      changes,
     };
 
     const response = await fetch(syncUrl, {
@@ -82,50 +95,52 @@ export default class SyncClientAdapter {
     }
 
     const { serverClock, serverChanges = [] } = await response.json();
-    let merged = doc;
+
+    // Build lookup of local docs for merge
+    const localDocMap = new Map(syncableDocs.map(({ uuid, doc }) => [uuid, doc]));
+    const results = {};
 
     for (const serverChange of serverChanges) {
       const { _key, _rev, _fieldRevs, ...serverDoc } = serverChange;
 
-      if (_key === docId) {
+      if (localDocMap.has(_key)) {
         // 3-way merge own document
-        const result = merge(
+        const localDoc  = localDocMap.get(_key);
+        const base      = JSON.parse(localStorage.getItem(this._baseKey(_key)) ?? '{}');
+        const fieldRevs = JSON.parse(localStorage.getItem(this._revKey(_key))  ?? '{}');
+        const result    = merge(
           base,
-          { doc, fieldRevs },
+          { doc: localDoc, fieldRevs },
           { doc: serverDoc, fieldRevs: _fieldRevs ?? {} },
         );
-        merged = result.merged;
+        results[_key] = result.merged;
       } else {
-        // Foreign document from another device — store if not already present
-        if (this.documentStore.get(_key) === null) {
-          this.documentStore.set(_key, serverDoc);
-        }
+        // Foreign document — store locally
+        this.syncDocumentStore.set(_key, serverDoc);
       }
     }
 
-    localStorage.setItem(this._syncKey(docId),  serverClock);
-    localStorage.setItem(this._baseKey(docId), JSON.stringify(merged));
-    // Clear fieldRevs after successful sync (they've been applied)
-    localStorage.setItem(this._revKey(docId), '{}');
+    // Persist sync state for all synced docs
+    for (const { uuid } of syncableDocs) {
+      localStorage.setItem(this._syncKey(uuid), serverClock);
+      const merged = results[uuid] || localDocMap.get(uuid);
+      localStorage.setItem(this._baseKey(uuid), JSON.stringify(merged));
+      localStorage.setItem(this._revKey(uuid), '{}');
+    }
 
-    return merged;
+    return results;
   }
 
-  /**
-   * Remove all sync state for a document.
-   * @param {string} docId
-   */
+  /** Remove all sync state for a document. */
   prune(docId) {
     localStorage.removeItem(this._syncKey(docId));
     localStorage.removeItem(this._revKey(docId));
     localStorage.removeItem(this._baseKey(docId));
   }
 
-  /**
-   * Remove sync state for ALL documents in the DocumentStore.
-   */
+  /** Remove sync state for ALL documents in the store. */
   pruneAll() {
-    for (const { uuid } of this.documentStore.list()) {
+    for (const { uuid } of this.syncDocumentStore.list()) {
       this.prune(uuid);
     }
   }

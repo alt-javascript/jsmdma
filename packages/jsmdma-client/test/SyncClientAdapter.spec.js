@@ -1,192 +1,179 @@
-/**
- * SyncClientAdapter.spec.js — TDD tests for SyncClientAdapter
- */
-import { assert } from 'chai';
-import DocumentStore from '../DocumentStore.js';
+// packages/jsmdma-client/test/SyncClientAdapter.spec.js
+import { expect } from 'chai';
 import SyncClientAdapter from '../SyncClientAdapter.js';
+import { SyncDocumentStore } from '../SyncDocumentStore.js';
 import { HLC } from '@alt-javascript/jsmdma-core';
 
-// ── mock localStorage ──────────────────────────────────────────────────────────
-let _store = {};
-const mockStorage = {
-  getItem:    (k) => _store[k] ?? null,
-  setItem:    (k, v) => { _store[k] = String(v); },
-  removeItem: (k) => { delete _store[k]; },
-  clear:      () => { _store = {}; },
-  key:        (n) => Object.keys(_store)[n] ?? null,
-  get length() { return Object.keys(_store).length; },
+// Mock localStorage for Node.js
+const storage = {};
+globalThis.localStorage = {
+  getItem: (k) => storage[k] ?? null,
+  setItem: (k, v) => { storage[k] = String(v); },
+  removeItem: (k) => { delete storage[k]; },
+  clear: () => { for (const k of Object.keys(storage)) delete storage[k]; },
+  get length() { return Object.keys(storage).length; },
+  key: (i) => Object.keys(storage)[i] ?? null,
 };
-const DOC_ID  = 'plan-uuid-1';
-const SYNC_URL = 'http://127.0.0.1:8081/year-planner/sync';
-const AUTH_HDR = { Authorization: 'Bearer test-jwt' };
 
-function makeAdapter(collection = 'planners') {
-  const store = new DocumentStore({ namespace: 'plnr' });
-  return { store, adapter: new SyncClientAdapter(store, { collection }) };
-}
+// Mock fetch
+let fetchCalls = [];
+let fetchResponse = { serverClock: '0000000000001-000001-server', serverChanges: [] };
 
-function mockSyncResponse(serverChanges = [], serverClock = null) {
-  let capturedBody = null;
-  global.fetch = async (url, opts) => {
-    capturedBody = JSON.parse(opts.body);
+function installFetchMock() {
+  globalThis.fetch = async (url, opts) => {
+    fetchCalls.push({ url, opts });
     return {
-      ok: true, status: 200,
-      json: async () => ({
-        serverClock: serverClock ?? HLC.tick(HLC.zero(), Date.now()),
-        serverChanges,
-        conflicts: [],
-      }),
-      headers: { get: () => null },
+      ok: true,
+      json: async () => fetchResponse,
     };
   };
-  return () => capturedBody;
 }
 
+installFetchMock();
+
 describe('SyncClientAdapter', () => {
-  // Scoped setup: re-assert mock before each test, clear after.
-  beforeEach(() => { global.localStorage = mockStorage; });
-  afterEach(() => {
-    mockStorage.clear();
-    delete global.fetch;
-  });
-  describe('markEdited()', () => {
-    it('stores an HLC timestamp for the given dotPath', () => {
-      const { adapter } = makeAdapter();
-      adapter.markEdited(DOC_ID, 'days.2026-03-28.tl');
-      const revs = JSON.parse(mockStorage.getItem(`rev:${DOC_ID}`));
-      assert.property(revs, 'days.2026-03-28.tl');
-      assert.isString(revs['days.2026-03-28.tl']);
-    });
+  let store;
+  let adapter;
 
-    it('second markEdited produces a strictly later clock than the first', () => {
-      const { adapter } = makeAdapter();
-      adapter.markEdited(DOC_ID, 'days.2026-03-28.tl');
-      const first = JSON.parse(mockStorage.getItem(`rev:${DOC_ID}`))['days.2026-03-28.tl'];
-      adapter.markEdited(DOC_ID, 'days.2026-03-28.tl');
-      const second = JSON.parse(mockStorage.getItem(`rev:${DOC_ID}`))['days.2026-03-28.tl'];
-      assert.equal(HLC.compare(first, second), -1, 'second clock must be > first');
-    });
+  beforeEach(() => {
+    localStorage.clear();
+    fetchCalls = [];
+    fetchResponse = { serverClock: '0000000000001-000001-server', serverChanges: [] };
+    installFetchMock(); // re-install in case another spec's afterEach deleted it
+    store = new SyncDocumentStore({ namespace: 'test' });
+    adapter = new SyncClientAdapter(store, { collection: 'planners' });
   });
 
-  describe('sync()', () => {
-    it('sends correct jsmdma payload shape', async () => {
-      const { store, adapter } = makeAdapter();
-      const doc = { meta: { year: 2026 }, days: {} };
-      store.set(DOC_ID, doc);
-      const getBody = mockSyncResponse();
-
-      await adapter.sync(DOC_ID, doc, AUTH_HDR, SYNC_URL);
-
-      const body = getBody();
-      assert.equal(body.collection, 'planners');
-      assert.isString(body.clientClock);
-      assert.isArray(body.changes);
-      assert.lengthOf(body.changes, 1);
-      assert.equal(body.changes[0].key, DOC_ID);
-      assert.deepEqual(body.changes[0].doc, doc);
-      assert.isObject(body.changes[0].fieldRevs);
-      assert.isString(body.changes[0].baseClock);
+  describe('markEdited(docId, dotPath)', () => {
+    it('stores HLC timestamp for dotPath', () => {
+      adapter.markEdited('doc-1', 'days.2026-01-01.tl');
+      const revs = JSON.parse(localStorage.getItem('rev:doc-1'));
+      expect(revs).to.have.property('days.2026-01-01.tl');
     });
 
-    it('sends Authorization header from authHeaders', async () => {
-      const { store, adapter } = makeAdapter();
-      const doc = {};
-      store.set(DOC_ID, doc);
-      let capturedHeaders = null;
-      global.fetch = async (url, opts) => {
-        capturedHeaders = opts.headers;
-        return {
-          ok: true, status: 200,
-          json: async () => ({ serverClock: HLC.zero(), serverChanges: [], conflicts: [] }),
-          headers: { get: () => null },
-        };
+    it('produces strictly later clock on second call', () => {
+      adapter.markEdited('doc-1', 'field.a');
+      const rev1 = JSON.parse(localStorage.getItem('rev:doc-1'))['field.a'];
+      adapter.markEdited('doc-1', 'field.a');
+      const rev2 = JSON.parse(localStorage.getItem('rev:doc-1'))['field.a'];
+      expect(HLC.compare(rev2, rev1)).to.be.greaterThan(0);
+    });
+  });
+
+  describe('sync(userId, authHeaders, syncUrl)', () => {
+    it('sends all syncable docs in one request', async () => {
+      store.set('doc-1', { meta: { userKey: 'user-1' }, days: { '2026-01-01': { tl: 'A' } } });
+      store.set('doc-2', { meta: { userKey: 'user-1' }, days: { '2026-02-01': { tl: 'B' } } });
+      store.set('doc-3', { meta: { userKey: 'device-x' }, days: {} }); // not syncable
+
+      await adapter.sync('user-1', { Authorization: 'Bearer tok' }, 'http://localhost/sync');
+      expect(fetchCalls).to.have.length(1);
+      const body = JSON.parse(fetchCalls[0].opts.body);
+      expect(body.changes).to.have.length(2);
+      expect(body.changes.map(c => c.key).sort()).to.deep.equal(['doc-1', 'doc-2']);
+    });
+
+    it('sends empty changes when no syncable docs (pull-only)', async () => {
+      store.set('doc-1', { meta: { userKey: 'device-x' }, days: {} });
+
+      await adapter.sync('user-1', {}, 'http://localhost/sync');
+      expect(fetchCalls).to.have.length(1);
+      const body = JSON.parse(fetchCalls[0].opts.body);
+      expect(body.changes).to.deep.equal([]);
+    });
+
+    it('sends Authorization header', async () => {
+      await adapter.sync('user-1', { Authorization: 'Bearer abc' }, 'http://localhost/sync');
+      const headers = fetchCalls[0].opts.headers;
+      expect(headers['Authorization']).to.equal('Bearer abc');
+    });
+
+    it('merges matching _key serverChanges via merge', async () => {
+      store.set('doc-1', { meta: { userKey: 'user-1' }, days: {} });
+      fetchResponse = {
+        serverClock: '0000000000001-000001-server',
+        serverChanges: [{
+          _key: 'doc-1', _rev: '0000000000001-000001-server', _fieldRevs: {},
+          meta: { userKey: 'user-1' }, days: { '2026-03-01': { tl: 'ServerDay' } },
+        }],
       };
 
-      await adapter.sync(DOC_ID, doc, AUTH_HDR, SYNC_URL);
-      assert.equal(capturedHeaders['Authorization'], 'Bearer test-jwt');
+      const results = await adapter.sync('user-1', {}, 'http://localhost/sync');
+      expect(results).to.have.property('doc-1');
     });
 
-    it('persists sync clock, base snapshot after successful sync', async () => {
-      const { store, adapter } = makeAdapter();
-      const doc = { days: { '2026-01-01': { tp: 1 } } };
-      store.set(DOC_ID, doc);
-      const serverClock = HLC.tick(HLC.zero(), Date.now());
-      mockSyncResponse([], serverClock);
+    it('stores foreign _key serverChanges via set()', async () => {
+      store.set('doc-1', { meta: { userKey: 'user-1' }, days: {} });
+      fetchResponse = {
+        serverClock: '0000000000001-000001-server',
+        serverChanges: [{
+          _key: 'foreign-doc', _rev: '0000000000001-000001-server', _fieldRevs: {},
+          meta: { userKey: 'user-1', year: 2026 }, days: { '2026-05-01': { tl: 'Foreign' } },
+        }],
+      };
 
-      await adapter.sync(DOC_ID, doc, AUTH_HDR, SYNC_URL);
-
-      assert.equal(mockStorage.getItem(`sync:${DOC_ID}`), serverClock);
-      const base = JSON.parse(mockStorage.getItem(`base:${DOC_ID}`));
-      assert.deepEqual(base, doc);
+      await adapter.sync('user-1', {}, 'http://localhost/sync');
+      const foreignDoc = store.get('foreign-doc');
+      expect(foreignDoc).to.not.be.null;
+      expect(foreignDoc.days['2026-05-01'].tl).to.equal('Foreign');
     });
 
-    it('stores a foreign document received from the server via DocumentStore.set()', async () => {
-      const { store, adapter } = makeAdapter();
-      const ownDoc = { meta: { year: 2026, uid: 'user-1' }, days: {} };
-      const foreignKey = 'foreign-planner-uuid';
-      const foreignDoc = { meta: { year: 2026, uid: 'user-1' }, days: { '2026-05-01': { tp: 2 } } };
-      store.set(DOC_ID, ownDoc);
+    it('updates sync state for all synced docs', async () => {
+      store.set('doc-1', { meta: { userKey: 'user-1' }, days: {} });
+      store.set('doc-2', { meta: { userKey: 'user-1' }, days: {} });
+      adapter.markEdited('doc-1', 'days.2026-01-01.tl');
 
-      const serverClock = HLC.tick(HLC.zero(), Date.now());
-      mockSyncResponse([{ _key: foreignKey, _rev: 1, _fieldRevs: {}, ...foreignDoc }], serverClock);
+      await adapter.sync('user-1', {}, 'http://localhost/sync');
+      expect(localStorage.getItem('sync:doc-1')).to.equal('0000000000001-000001-server');
+      expect(localStorage.getItem('sync:doc-2')).to.equal('0000000000001-000001-server');
+    });
 
-      await adapter.sync(DOC_ID, ownDoc, AUTH_HDR, SYNC_URL);
+    it('clears rev: after successful sync', async () => {
+      store.set('doc-1', { meta: { userKey: 'user-1' }, days: {} });
+      adapter.markEdited('doc-1', 'days.2026-01-01.tl');
+      expect(JSON.parse(localStorage.getItem('rev:doc-1'))).to.have.property('days.2026-01-01.tl');
 
-      // Foreign document stored in DocumentStore
-      const stored = store.get(foreignKey);
-      assert.deepEqual(stored.meta, foreignDoc.meta);
-      assert.deepEqual(stored.days, foreignDoc.days);
+      await adapter.sync('user-1', {}, 'http://localhost/sync');
+      expect(JSON.parse(localStorage.getItem('rev:doc-1'))).to.deep.equal({});
     });
 
     it('throws with err.status on HTTP error', async () => {
-      const { store, adapter } = makeAdapter();
-      store.set(DOC_ID, {});
-      global.fetch = async () => ({
-        ok: false, status: 401,
-        json: async () => ({ error: 'unauthorized' }),
-        headers: { get: () => null },
-      });
-
+      globalThis.fetch = async () => ({ ok: false, status: 401 });
       try {
-        await adapter.sync(DOC_ID, {}, AUTH_HDR, SYNC_URL);
-        assert.fail('expected error');
+        await adapter.sync('user-1', {}, 'http://localhost/sync');
+        expect.fail('should have thrown');
       } catch (err) {
-        assert.equal(err.status, 401);
+        expect(err.status).to.equal(401);
       }
+      // Restore mock
+      globalThis.fetch = async (url, opts) => {
+        fetchCalls.push({ url, opts });
+        return { ok: true, json: async () => fetchResponse };
+      };
     });
   });
 
-  describe('prune()', () => {
-    it('removes rev:, base:, sync: keys for the docId', () => {
-      const { adapter } = makeAdapter();
-      mockStorage.setItem(`rev:${DOC_ID}`,  JSON.stringify({ 'a.b': 'clock' }));
-      mockStorage.setItem(`base:${DOC_ID}`, JSON.stringify({ x: 1 }));
-      mockStorage.setItem(`sync:${DOC_ID}`, 'some-clock');
-
-      adapter.prune(DOC_ID);
-
-      assert.isNull(mockStorage.getItem(`rev:${DOC_ID}`));
-      assert.isNull(mockStorage.getItem(`base:${DOC_ID}`));
-      assert.isNull(mockStorage.getItem(`sync:${DOC_ID}`));
+  describe('prune(docId)', () => {
+    it('removes rev/base/sync keys', () => {
+      localStorage.setItem('sync:doc-1', 'clock');
+      localStorage.setItem('rev:doc-1', '{}');
+      localStorage.setItem('base:doc-1', '{}');
+      adapter.prune('doc-1');
+      expect(localStorage.getItem('sync:doc-1')).to.be.null;
+      expect(localStorage.getItem('rev:doc-1')).to.be.null;
+      expect(localStorage.getItem('base:doc-1')).to.be.null;
     });
   });
 
   describe('pruneAll()', () => {
-    it('prunes sync state for every document in the DocumentStore', () => {
-      const { store, adapter } = makeAdapter();
-      store.set('uuid-a', { val: 1 });
-      store.set('uuid-b', { val: 2 });
-      mockStorage.setItem('rev:uuid-a',  '{}');
-      mockStorage.setItem('sync:uuid-a', 'clock-a');
-      mockStorage.setItem('rev:uuid-b',  '{}');
-      mockStorage.setItem('sync:uuid-b', 'clock-b');
-
+    it('prunes all documents in store', () => {
+      store.set('a', { meta: { userKey: 'u' } });
+      store.set('b', { meta: { userKey: 'u' } });
+      localStorage.setItem('sync:a', 'x');
+      localStorage.setItem('sync:b', 'x');
       adapter.pruneAll();
-
-      assert.isNull(mockStorage.getItem('rev:uuid-a'));
-      assert.isNull(mockStorage.getItem('sync:uuid-a'));
-      assert.isNull(mockStorage.getItem('rev:uuid-b'));
-      assert.isNull(mockStorage.getItem('sync:uuid-b'));
+      expect(localStorage.getItem('sync:a')).to.be.null;
+      expect(localStorage.getItem('sync:b')).to.be.null;
     });
   });
 });
