@@ -40,6 +40,7 @@ export default class AuthController {
     this.userRepository = null; // CDI autowired
     this.providers      = {};   // set directly or by authHonoStarter()
     this.logger         = null; // CDI autowired
+    this.spaOrigin      = null; // set at runtime (e.g. 'http://localhost:8080')
   }
 
   // ── auth helpers ───────────────────────────────────────────────────────────
@@ -147,31 +148,41 @@ export default class AuthController {
     const instance     = this.providers[provider];
     if (!instance) return { statusCode: 400, body: { error: `Unknown provider: ${provider}` } };
 
-    const result = this.authService.beginAuth(provider, instance);
-    this.logger?.debug?.(`[AuthController] beginAuth provider=${provider}`);
+    const options = {};
+    if (request.query?.link === 'true') options.link = true;
+
+    const result = this.authService.beginAuth(provider, instance, options);
+    this.logger?.debug?.(`[AuthController] beginAuth provider=${provider} link=${!!options.link}`);
     return result;
   }
 
   /**
    * GET /auth/:provider/callback
-   * Completes OAuth flow. Returns { user, token }.
+   * Completes OAuth flow. Redirects browser to {spaOrigin}/?token=<jwt>.
    */
   async completeAuth(request) {
     const { provider }  = request.params;
     const instance      = this.providers[provider];
     if (!instance) return { statusCode: 400, body: { error: `Unknown provider: ${provider}` } };
 
-    const { code, state, stored_state: storedState, code_verifier: codeVerifier } = request.query;
-    if (!code || !state || !storedState) {
-      return { statusCode: 400, body: { error: 'Missing required query params: code, state, stored_state' } };
+    const { code, state } = request.query;
+    if (!code || !state) {
+      return { statusCode: 400, body: { error: 'Missing required query params: code, state' } };
     }
 
     try {
-      const result = await this.authService.completeAuth(
-        provider, instance, code, state, storedState, codeVerifier ?? '',
-      );
+      const result = await this.authService.completeAuth(provider, instance, code, state);
+
+      // Link mode: redirect to SPA with code instead of token
+      if (result.linkMode) {
+        const redirectUrl = `${this.spaOrigin ?? ''}/?code=${encodeURIComponent(result.code)}&state=${encodeURIComponent(result.state)}&code_verifier=${encodeURIComponent(result.codeVerifier)}`;
+        this.logger?.info?.(`[AuthController] completeAuth linkMode provider=${provider} — forwarding code to SPA`);
+        return { redirect: redirectUrl, statusCode: 302 };
+      }
+
+      const redirectUrl = `${this.spaOrigin ?? ''}/?token=${encodeURIComponent(result.token)}`;
       this.logger?.info?.(`[AuthController] completeAuth provider=${provider} userId=${result.user.userId}`);
-      return result;
+      return { redirect: redirectUrl, statusCode: 302 };
     } catch (err) {
       if (err.name === 'InvalidStateError') return { statusCode: 400, body: { error: err.message } };
       this.logger?.error?.(`[AuthController] completeAuth error: ${err.message}`);
