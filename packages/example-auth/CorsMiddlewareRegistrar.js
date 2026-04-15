@@ -13,7 +13,7 @@ export default class CorsMiddlewareRegistrar {
   routes(app) {
     app.use('*', cors({
       origin: ['http://localhost:8080', 'http://127.0.0.1:8080'],
-      allowMethods: ['GET', 'POST', 'OPTIONS'],
+      allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
       allowHeaders: ['Content-Type', 'Authorization'],
       maxAge: 300,
     }));
