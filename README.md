@@ -47,6 +47,9 @@ node packages/example/run-apps.js
 
 # Lambda adapter entrypoint verification (packages/example/lambda-handler.js)
 npm run -w packages/example test:lambda-entrypoint
+
+# Node↔Lambda parity matrix verification (401/403/400/404/5xx redaction)
+npm run -w packages/example test:parity
 ```
 
 **Prerequisites:** Node.js ≥ 20
@@ -85,6 +88,7 @@ packages/
 - **[Deletion](docs/deletion.md)** — hard-delete protocol, tombstoning, and purge semantics
 - **[Data Model](docs/data-model.md)** — document structure, DocIndex schema, storage namespace layout, and relationship design
 - **[OpenAPI Spec](docs/openapi.yaml)** — machine-readable API description (OpenAPI 3.1.0) covering all endpoints
+- **[M011 Migration Contract](docs/migration-contract-m011.md)** — breaking changes, old-to-new mapping, and executable Node↔Lambda parity verification matrix (`test:parity`, `test:lambda-entrypoint`)
 - **[Year Planner Integration](docs/year-planner-integration.md)** — worked example integrating the API with a calendar/planner front-end
 - **[Architecture Decision Records](docs/decisions/)** — ADR-001 through ADR-019 capturing key design choices
 
@@ -309,6 +313,9 @@ node packages/example/run-apps.js
 
 # Lambda adapter entrypoint verification (packages/example/lambda-handler.js)
 npm run -w packages/example test:lambda-entrypoint
+
+# Node↔Lambda parity matrix verification (401/403/400/404/5xx redaction)
+npm run -w packages/example test:parity
 
 # Auth lifecycle demo
 node packages/example-auth/run.js

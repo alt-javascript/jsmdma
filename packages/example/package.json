@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node run.js",
     "test": "mocha --recursive test/**/*.spec.js",
-    "test:lambda-entrypoint": "mocha --recursive test/lambdaEntrypoint.spec.js"
+    "test:lambda-entrypoint": "mocha --recursive test/lambdaEntrypoint.spec.js",
+    "test:parity": "mocha --recursive test/nodeLambdaParity.spec.js"
   },
   "dependencies": {
     "@alt-javascript/boot": "3.0.7",
