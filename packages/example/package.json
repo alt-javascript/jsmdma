@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node run.js",
-    "test": "mocha --recursive test/**/*.spec.js"
+    "test": "mocha --recursive test/**/*.spec.js",
+    "test:lambda-entrypoint": "mocha --recursive test/lambdaEntrypoint.spec.js"
   },
   "dependencies": {
     "@alt-javascript/boot": "3.0.7",

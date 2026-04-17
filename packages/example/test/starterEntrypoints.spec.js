@@ -21,6 +21,7 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RUN_JS_PATH = resolve(__dirname, '../run.js');
 const RUN_APPS_PATH = resolve(__dirname, '../run-apps.js');
+const LAMBDA_HANDLER_PATH = resolve(__dirname, '../lambda-handler.js');
 const FULL_STACK_RUNTIME_PATH = resolve(__dirname, '../runtime/fullStackStarterApp.js');
 
 const RUN_JS_JWT_SECRET = 'example-jwt-secret-at-least-32-chars!';
@@ -102,6 +103,20 @@ describe('starter entrypoint regressions (packages/example)', () => {
       assert.notMatch(source, /const\s+PLANNER_SCHEMA_PATH\s*=/);
       assert.notMatch(source, /from\s*['"]@alt-javascript\/jsmdma-server['"]/);
       assert.notMatch(source, /from\s*['"]@alt-javascript\/jsmdma-auth-server['"]/);
+    });
+
+    it('lambda-handler.js consumes shared runtime composition and hono/aws-lambda adapter wiring', async () => {
+      const source = await readFile(LAMBDA_HANDLER_PATH, 'utf8');
+
+      assert.match(source, /import\s*\{\s*handle\s*\}\s*from\s*['"]hono\/aws-lambda['"];/);
+      assert.match(source, /import\s*\{\s*buildFullStackStarterApp\s*\}\s*from\s*['"]\.\/runtime\/fullStackStarterApp\.js['"];/);
+      assert.match(source, /appBuilder\s*=\s*buildFullStackStarterApp/);
+      assert.match(source, /const\s+lambdaAdapter\s*=\s*handle\(appRuntime\.app\)/);
+
+      // Guard against composition drift back to local/manual starter wiring.
+      assert.notMatch(source, /from\s*['"]@alt-javascript\/jsmdma-hono['"]/);
+      assert.notMatch(source, /from\s*['"]@alt-javascript\/jsmdma-server['"]/);
+      assert.notMatch(source, /from\s*['"]@alt-javascript\/jsmdma-auth-hono['"]/);
     });
 
     it('shared runtime module owns full-stack hooks, schema paths, and no-reg starter options', async () => {

@@ -44,6 +44,9 @@ node packages/example/run.js
 
 # Multi-app + org demo
 node packages/example/run-apps.js
+
+# Lambda adapter entrypoint verification (packages/example/lambda-handler.js)
+npm run -w packages/example test:lambda-entrypoint
 ```
 
 **Prerequisites:** Node.js ≥ 20
@@ -303,6 +306,9 @@ node packages/example/run.js
 
 # Multi-app + org demo
 node packages/example/run-apps.js
+
+# Lambda adapter entrypoint verification (packages/example/lambda-handler.js)
+npm run -w packages/example test:lambda-entrypoint
 
 # Auth lifecycle demo
 node packages/example-auth/run.js
