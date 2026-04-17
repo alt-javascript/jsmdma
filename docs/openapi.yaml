@@ -325,10 +325,11 @@ paths:
       summary: Initiate OAuth flow
       description: |
         Begins an OAuth authorization code flow for the given provider.
-        Returns the authorization URL, state parameter, and PKCE code verifier.
+        Returns the authorization URL and state parameter.
+        The PKCE code verifier is stored server-side and is not exposed in the
+        public begin-auth response payload.
         The client should redirect the user to `authorizationURL`, then call
-        `GET /auth/{provider}/callback` with the returned `code`, `state`, and
-        the stored `state` and `code_verifier`.
+        `GET /auth/{provider}/callback` with the returned `code` and `state`.
       operationId: beginAuth
       tags: [auth]
       security: []
@@ -348,7 +349,7 @@ paths:
             type: string
       responses:
         '200':
-          description: Authorization URL and PKCE parameters
+          description: Authorization URL and state parameter
           content:
             application/json:
               schema:
@@ -361,10 +362,7 @@ paths:
                   state:
                     type: string
                     description: State parameter to pass back in the callback
-                  codeVerifier:
-                    type: string
-                    description: PKCE code verifier to store and pass back in the callback
-                required: [authorizationURL, state, codeVerifier]
+                required: [authorizationURL, state]
         '400':
           description: Unknown provider
           content:

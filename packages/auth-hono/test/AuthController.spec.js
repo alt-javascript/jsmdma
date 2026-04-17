@@ -124,7 +124,7 @@ describe('AuthController (CDI integration)', () => {
   // ── GET /auth/:provider ───────────────────────────────────────────────────────
 
   describe('GET /auth/:provider', () => {
-    it('returns authorizationURL and state for known provider', async () => {
+    it('returns authorizationURL and state (without codeVerifier) for known provider', async () => {
       const res = await ctx.app.request('/auth/mock');
       assert.equal(res.status, 200);
       const body = await res.json();

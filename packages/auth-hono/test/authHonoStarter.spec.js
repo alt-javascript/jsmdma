@@ -4,7 +4,7 @@
  * Verifies the helper wires the full auth stack correctly:
  * - /auth/me returns 401 without token
  * - /:app/sync returns 401 without token
- * - /auth/:provider returns beginAuth JSON with authorizationURL
+ * - /auth/:provider returns beginAuth JSON with authorizationURL + state (no codeVerifier)
  * - authController.providers can be set post-startup
  */
 import { assert } from 'chai';
@@ -97,7 +97,7 @@ describe('authHonoStarter()', () => {
     });
   });
 
-  it('GET /auth/mock returns beginAuth JSON', async () => {
+  it('GET /auth/mock returns beginAuth JSON without codeVerifier leakage', async () => {
     const res = await app.request('http://localhost/auth/mock');
     assert.equal(res.status, 200);
     const body = await res.json();

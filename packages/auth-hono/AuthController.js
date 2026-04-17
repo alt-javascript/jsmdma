@@ -199,6 +199,7 @@ export default class AuthController {
   /**
    * GET /auth/:provider
    * Initiates OAuth flow. Returns { authorizationURL, state }.
+   * PKCE verifier remains server-side in AuthService and is not exposed here.
    */
   beginAuth(request) {
     const { provider } = request.params;

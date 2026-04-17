@@ -49,17 +49,16 @@ describe('AuthService', () => {
   // ── beginAuth() ─────────────────────────────────────────────────────────────
 
   describe('beginAuth()', () => {
-    it('returns authorizationURL, state, and codeVerifier', async () => {
+    it('returns authorizationURL and state only (PKCE verifier stays server-side)', async () => {
       const { svc } = await makeService();
       const provider = new MockProvider('uid-1');
       const result   = svc.beginAuth('mock', provider);
 
       assert.property(result, 'authorizationURL');
       assert.property(result, 'state');
-      assert.property(result, 'codeVerifier');
+      assert.notProperty(result, 'codeVerifier');
       assert.isString(result.authorizationURL);
       assert.isString(result.state);
-      assert.isString(result.codeVerifier);
     });
 
     it('authorizationURL contains the state parameter', async () => {
@@ -77,9 +76,9 @@ describe('AuthService', () => {
     it('creates a new user with a UUID', async () => {
       const { svc } = await makeService();
       const provider = new MockProvider('github-uid-1', 'alice@github.com');
-      const { authorizationURL, state, codeVerifier } = svc.beginAuth('github', provider);
+      const { state } = svc.beginAuth('github', provider);
 
-      const { user, token } = await svc.completeAuth('github', provider, 'mock-code', state, state, codeVerifier);
+      const { user } = await svc.completeAuth('github', provider, 'mock-code', state);
 
       assert.isString(user.userId);
       assert.match(user.userId, /^[0-9a-f-]{36}$/, 'userId should be a UUID');
@@ -88,9 +87,9 @@ describe('AuthService', () => {
     it('new user has the provider in providers list', async () => {
       const { svc } = await makeService();
       const provider = new MockProvider('github-uid-2', 'bob@github.com');
-      const { state, codeVerifier } = svc.beginAuth('github', provider);
+      const { state } = svc.beginAuth('github', provider);
 
-      const { user } = await svc.completeAuth('github', provider, 'code', state, state, codeVerifier);
+      const { user } = await svc.completeAuth('github', provider, 'code', state);
 
       assert.isArray(user.providers);
       assert.lengthOf(user.providers, 1);
@@ -101,18 +100,18 @@ describe('AuthService', () => {
     it('new user has the email from provider', async () => {
       const { svc } = await makeService();
       const provider = new MockProvider('github-uid-3', 'carol@github.com');
-      const { state, codeVerifier } = svc.beginAuth('github', provider);
+      const { state } = svc.beginAuth('github', provider);
 
-      const { user } = await svc.completeAuth('github', provider, 'code', state, state, codeVerifier);
+      const { user } = await svc.completeAuth('github', provider, 'code', state);
       assert.equal(user.email, 'carol@github.com');
     });
 
     it('returns a signed JWT token', async () => {
       const { svc } = await makeService();
       const provider = new MockProvider('gh-uid-4', 'dave@github.com');
-      const { state, codeVerifier } = svc.beginAuth('github', provider);
+      const { state } = svc.beginAuth('github', provider);
 
-      const { user, token } = await svc.completeAuth('github', provider, 'code', state, state, codeVerifier);
+      const { user, token } = await svc.completeAuth('github', provider, 'code', state);
 
       assert.isString(token);
       const payload = await JwtSession.verify(token, JWT_SECRET);
@@ -122,9 +121,9 @@ describe('AuthService', () => {
     it('JWT token contains providers array', async () => {
       const { svc } = await makeService();
       const provider = new MockProvider('gh-uid-5', 'eve@github.com');
-      const { state, codeVerifier } = svc.beginAuth('github', provider);
+      const { state } = svc.beginAuth('github', provider);
 
-      const { token } = await svc.completeAuth('github', provider, 'code', state, state, codeVerifier);
+      const { token } = await svc.completeAuth('github', provider, 'code', state);
       const payload = await JwtSession.verify(token, JWT_SECRET);
       assert.deepEqual(payload.providers, ['github']);
     });
@@ -137,11 +136,11 @@ describe('AuthService', () => {
       const { svc } = await makeService();
       const provider = new MockProvider('gh-uid-returning', 'return@github.com');
 
-      const { state: s1, codeVerifier: cv1 } = svc.beginAuth('github', provider);
-      const { user: user1 } = await svc.completeAuth('github', provider, 'code', s1, s1, cv1);
+      const { state: s1 } = svc.beginAuth('github', provider);
+      const { user: user1 } = await svc.completeAuth('github', provider, 'code', s1);
 
-      const { state: s2, codeVerifier: cv2 } = svc.beginAuth('github', provider);
-      const { user: user2 } = await svc.completeAuth('github', provider, 'code', s2, s2, cv2);
+      const { state: s2 } = svc.beginAuth('github', provider);
+      const { user: user2 } = await svc.completeAuth('github', provider, 'code', s2);
 
       assert.equal(user1.userId, user2.userId, 'UUID should be stable across logins');
     });
@@ -150,11 +149,11 @@ describe('AuthService', () => {
       const { svc } = await makeService();
       const provider = new MockProvider('gh-uid-stable', 'stable@github.com');
 
-      const { state: s1, codeVerifier: cv1 } = svc.beginAuth('github', provider);
-      const { user: user1, token: tok1 } = await svc.completeAuth('github', provider, 'code', s1, s1, cv1);
+      const { state: s1 } = svc.beginAuth('github', provider);
+      const { token: tok1 } = await svc.completeAuth('github', provider, 'code', s1);
 
-      const { state: s2, codeVerifier: cv2 } = svc.beginAuth('github', provider);
-      const { token: tok2 } = await svc.completeAuth('github', provider, 'code', s2, s2, cv2);
+      const { state: s2 } = svc.beginAuth('github', provider);
+      const { token: tok2 } = await svc.completeAuth('github', provider, 'code', s2);
 
       const p1 = await JwtSession.verify(tok1, JWT_SECRET);
       const p2 = await JwtSession.verify(tok2, JWT_SECRET);
@@ -165,13 +164,13 @@ describe('AuthService', () => {
   // ── completeAuth() — state validation ───────────────────────────────────────
 
   describe('completeAuth() — CSRF protection', () => {
-    it('throws InvalidStateError when state does not match storedState', async () => {
+    it('throws InvalidStateError when state is unknown or expired', async () => {
       const { svc } = await makeService();
       const provider = new MockProvider('gh-uid-csrf');
-      const { codeVerifier } = svc.beginAuth('github', provider);
+      const { state } = svc.beginAuth('github', provider);
 
       try {
-        await svc.completeAuth('github', provider, 'code', 'wrong-state', 'correct-state', codeVerifier);
+        await svc.completeAuth('github', provider, 'code', `${state}-tampered`);
         assert.fail('should have thrown InvalidStateError');
       } catch (err) {
         assert.instanceOf(err, InvalidStateError);
@@ -187,14 +186,14 @@ describe('AuthService', () => {
 
       // First login: Apple sends email
       const firstLogin  = new MockProvider('apple-sub-1', 'user@icloud.com');
-      const { state: s1, codeVerifier: cv1 } = svc.beginAuth('apple', firstLogin);
-      const { user: u1 } = await svc.completeAuth('apple', firstLogin, 'code', s1, s1, cv1);
+      const { state: s1 } = svc.beginAuth('apple', firstLogin);
+      const { user: u1 } = await svc.completeAuth('apple', firstLogin, 'code', s1);
       assert.equal(u1.email, 'user@icloud.com');
 
       // Second login: Apple sends null email (normal for Apple)
       const secondLogin = new MockProvider('apple-sub-1', null); // same providerUserId, no email
-      const { state: s2, codeVerifier: cv2 } = svc.beginAuth('apple', secondLogin);
-      const { user: u2 } = await svc.completeAuth('apple', secondLogin, 'code', s2, s2, cv2);
+      const { state: s2 } = svc.beginAuth('apple', secondLogin);
+      const { user: u2 } = await svc.completeAuth('apple', secondLogin, 'code', s2);
 
       assert.equal(u2.userId, u1.userId, 'UUID should be stable');
       assert.equal(u2.email, 'user@icloud.com', 'email should be preserved from first login');
