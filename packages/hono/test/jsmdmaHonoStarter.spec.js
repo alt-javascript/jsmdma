@@ -60,6 +60,7 @@ describe('jsmdmaHonoStarter()', () => {
     assert.includeMembers(names, [
       'syncRepository',
       'syncService',
+      'appSyncService',
       'applicationRegistry',
       'schemaValidator',
       'authMiddlewareRegistrar',
@@ -100,6 +101,7 @@ describe('jsmdmaHonoStarter()', () => {
 
     const beforeSyncIdx = names.indexOf('beforeSyncHook');
     const syncRepositoryIdx = names.indexOf('syncRepository');
+    const appSyncServiceIdx = names.indexOf('appSyncService');
     const beforeAuthIdx = names.indexOf('beforeAuthHook');
     const authMiddlewareIdx = names.indexOf('authMiddlewareRegistrar');
     const beforeAppSyncIdx = names.indexOf('beforeAppSyncHook');
@@ -115,6 +117,10 @@ describe('jsmdmaHonoStarter()', () => {
     assert.isAtLeast(beforeAppSyncIdx, 0);
     assert.isBelow(authMiddlewareIdx, beforeAppSyncIdx, 'auth middleware must remain before beforeAppSync stage');
     assert.isBelow(beforeAppSyncIdx, appSyncIdx, 'beforeAppSync hook should be inserted before appSyncController');
+
+    assert.isAtLeast(appSyncServiceIdx, 0);
+    assert.isBelow(syncRepositoryIdx, appSyncServiceIdx, 'appSyncService should be inserted after sync repository/service registration');
+    assert.isBelow(appSyncServiceIdx, appSyncIdx, 'appSyncService should be registered before appSyncController');
 
     assert.isAtLeast(afterAppSyncIdx, 0);
     assert.isAbove(afterAppSyncIdx, appSyncIdx, 'afterAppSync hook should be inserted after appSyncController');
@@ -218,6 +224,7 @@ describe('jsmdmaHonoStarter()', () => {
 
     assert.notInclude(names, 'syncRepository');
     assert.notInclude(names, 'syncService');
+    assert.notInclude(names, 'appSyncService');
     assert.notInclude(names, 'applicationRegistry');
     assert.notInclude(names, 'schemaValidator');
     assert.notInclude(names, 'appSyncController');

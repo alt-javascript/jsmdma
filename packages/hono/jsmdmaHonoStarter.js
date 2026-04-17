@@ -20,6 +20,7 @@ import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
 import {
   SyncRepository,
   SyncService,
+  AppSyncService,
   ApplicationRegistry,
   SchemaValidator,
 } from '@alt-javascript/jsmdma-server';
@@ -260,8 +261,9 @@ export function jsmdmaHonoStarter(options = {}) {
 
   if (features.sync) {
     registrations.push(
-      { Reference: SyncRepository, name: 'syncRepository', scope: 'singleton' },
-      { Reference: SyncService,    name: 'syncService',    scope: 'singleton' },
+      { Reference: SyncRepository,  name: 'syncRepository',  scope: 'singleton' },
+      { Reference: SyncService,     name: 'syncService',     scope: 'singleton' },
+      { Reference: AppSyncService,  name: 'appSyncService',  scope: 'singleton' },
       {
         Reference:  ApplicationRegistry,
         name:       'applicationRegistry',

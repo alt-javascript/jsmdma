@@ -34,7 +34,7 @@ import { EphemeralConfig } from '@alt-javascript/config';
 import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
 import {
-  SyncRepository, SyncService, ExportService,
+  SyncRepository, SyncService, AppSyncService, ExportService,
   ApplicationRegistry, SchemaValidator, DocumentIndexRepository,
   DeletionService,
 } from '@alt-javascript/jsmdma-server';
@@ -79,6 +79,7 @@ async function buildContext() {
     ...jsnosqlcAutoConfiguration(),
     { Reference: SyncRepository,          name: 'syncRepository',          scope: 'singleton' },
     { Reference: SyncService,             name: 'syncService',             scope: 'singleton' },
+    { Reference: AppSyncService,          name: 'appSyncService',          scope: 'singleton' },
     { Reference: ExportService,           name: 'exportService',           scope: 'singleton' },
     { Reference: DeletionService,         name: 'deletionService',         scope: 'singleton' },
     { Reference: ApplicationRegistry,     name: 'applicationRegistry',     scope: 'singleton',

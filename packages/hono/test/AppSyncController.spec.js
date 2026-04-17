@@ -1,7 +1,8 @@
 /**
  * AppSyncController.spec.js — Integration tests for AppSyncController
  *
- * Full CDI stack: AuthMiddlewareRegistrar → AppSyncController → SyncService → SyncRepository
+ * Full CDI stack: AuthMiddlewareRegistrar → AppSyncController → AppSyncService
+ *                  → SyncService → SyncRepository
  * Uses Hono's app.request() — no real HTTP server.
  * Uses JwtSession.sign() to mint test tokens.
  */
@@ -11,7 +12,14 @@ import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
 import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
-import { SyncRepository, SyncService, ApplicationRegistry, SchemaValidator, DocumentIndexRepository } from '@alt-javascript/jsmdma-server';
+import {
+  SyncRepository,
+  SyncService,
+  AppSyncService,
+  ApplicationRegistry,
+  SchemaValidator,
+  DocumentIndexRepository,
+} from '@alt-javascript/jsmdma-server';
 import { AuthMiddlewareRegistrar } from '@alt-javascript/jsmdma-auth-hono';
 import {
   OrgRepository, OrgService, UserRepository,
@@ -61,6 +69,7 @@ async function buildContext() {
     ...jsnosqlcAutoConfiguration(),
     { Reference: SyncRepository,      name: 'syncRepository',      scope: 'singleton' },
     { Reference: SyncService,         name: 'syncService',         scope: 'singleton' },
+    { Reference: AppSyncService,      name: 'appSyncService',      scope: 'singleton' },
     { Reference: ApplicationRegistry, name: 'applicationRegistry', scope: 'singleton',
       properties: [{ name: 'applications', path: 'applications' }] },
     { Reference: SchemaValidator, name: 'schemaValidator', scope: 'singleton',
@@ -69,6 +78,27 @@ async function buildContext() {
     { Reference: OrgRepository,   name: 'orgRepository',   scope: 'singleton' },
     { Reference: OrgService,      name: 'orgService',      scope: 'singleton' },
     // Auth middleware MUST come before AppSyncController
+    { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
+      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
+    { Reference: AppSyncController, name: 'appSyncController', scope: 'singleton' },
+  ]);
+
+  const appCtx = new ApplicationContext({ contexts: [context], config });
+  await appCtx.start({ run: false });
+  await appCtx.get('nosqlClient').ready();
+
+  return appCtx;
+}
+
+async function buildContextWithoutAppSyncService() {
+  const config = new EphemeralConfig(BASE_CONFIG);
+
+  const context = new Context([
+    ...honoStarter(),
+    ...jsnosqlcAutoConfiguration(),
+    { Reference: UserRepository, name: 'userRepository', scope: 'singleton' },
+    { Reference: OrgRepository,  name: 'orgRepository',  scope: 'singleton' },
+    { Reference: OrgService,     name: 'orgService',     scope: 'singleton' },
     { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
       properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
     { Reference: AppSyncController, name: 'appSyncController', scope: 'singleton' },
@@ -127,6 +157,31 @@ describe('AppSyncController (CDI integration)', () => {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       });
       assert.equal(res.status, 404);
+    });
+  });
+
+  // ── service wiring ───────────────────────────────────────────────────────────
+
+  describe('POST /:application/sync — service wiring', () => {
+    it('returns 500 when appSyncService is not wired', async () => {
+      const miswiredCtx = await buildContextWithoutAppSyncService();
+
+      try {
+        const miswiredApp = miswiredCtx.get('honoAdapter').app;
+        const token = await makeToken();
+
+        const res = await syncPost(miswiredApp, 'todo', {
+          collection: 'tasks',
+          clientClock: HLC.zero(),
+          changes: [],
+        }, token);
+
+        assert.equal(res.status, 500);
+        const body = await res.json();
+        assert.equal(body.error, 'Sync adapter is misconfigured');
+      } finally {
+        await miswiredCtx.stop?.();
+      }
     });
   });
 
@@ -393,19 +448,20 @@ describe('AppSyncController (CDI integration)', () => {
   // ── CDI wiring ────────────────────────────────────────────────────────────────
 
   describe('CDI wiring', () => {
-    it('appSyncController.syncService is autowired', () => {
+    it('appSyncController.appSyncService is autowired', () => {
       const ctrl = appCtx.get('appSyncController');
-      assert.instanceOf(ctrl.syncService, SyncService);
+      assert.instanceOf(ctrl.appSyncService, AppSyncService);
     });
 
-    it('appSyncController.applicationRegistry is set', () => {
-      const ctrl = appCtx.get('appSyncController');
-      assert.instanceOf(ctrl.applicationRegistry, ApplicationRegistry);
+    it('appSyncService.syncService is autowired', () => {
+      const service = appCtx.get('appSyncService');
+      assert.instanceOf(service.syncService, SyncService);
     });
 
-    it('appSyncController.schemaValidator is set', () => {
-      const ctrl = appCtx.get('appSyncController');
-      assert.instanceOf(ctrl.schemaValidator, SchemaValidator);
+    it('appSyncService application/schema dependencies are autowired', () => {
+      const service = appCtx.get('appSyncService');
+      assert.instanceOf(service.applicationRegistry, ApplicationRegistry);
+      assert.instanceOf(service.schemaValidator, SchemaValidator);
     });
   });
 
@@ -569,7 +625,7 @@ describe('AppSyncController (CDI integration)', () => {
 // so we can assert that upsertOwnership fires on sync writes.
 //
 // The existing suite above remains completely unmodified — it proves backward
-// compatibility (AppSyncController works fine when documentIndexRepository is
+// compatibility (AppSyncService works fine when documentIndexRepository is
 // NOT wired because of the null-guard).
 
 async function buildContextWithDocIndex() {
@@ -580,6 +636,7 @@ async function buildContextWithDocIndex() {
     ...jsnosqlcAutoConfiguration(),
     { Reference: SyncRepository,      name: 'syncRepository',      scope: 'singleton' },
     { Reference: SyncService,         name: 'syncService',         scope: 'singleton' },
+    { Reference: AppSyncService,      name: 'appSyncService',      scope: 'singleton' },
     { Reference: ApplicationRegistry, name: 'applicationRegistry', scope: 'singleton',
       properties: [{ name: 'applications', path: 'applications' }] },
     { Reference: SchemaValidator,     name: 'schemaValidator',     scope: 'singleton',
@@ -613,9 +670,9 @@ describe('AppSyncController — DocumentIndexRepository upsert on sync write', (
     docIndexRepo = appCtx.get('documentIndexRepository');
   });
 
-  it('documentIndexRepository is autowired into appSyncController', () => {
-    const ctrl = appCtx.get('appSyncController');
-    assert.instanceOf(ctrl.documentIndexRepository, DocumentIndexRepository);
+  it('documentIndexRepository is autowired into appSyncService', () => {
+    const service = appCtx.get('appSyncService');
+    assert.instanceOf(service.documentIndexRepository, DocumentIndexRepository);
   });
 
   it('docIndex entry is created with visibility=private after a sync write', async () => {
