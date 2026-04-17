@@ -213,7 +213,7 @@ The `applications` config block declares which application paths are accepted by
 
 ```js
 import {Context} from '@alt-javascript/cdi';
-import {jsmdmaHonoStarter} from 'packages/jsmdma-hono';
+import {jsmdmaHonoStarter} from '@alt-javascript/jsmdma-hono';
 
 const context = new Context([
     ...jsmdmaHonoStarter(),
@@ -224,7 +224,7 @@ const context = new Context([
 
 ```js
 import {Context} from '@alt-javascript/cdi';
-import {jsmdmaHonoStarter} from 'packages/jsmdma-hono';
+import {jsmdmaHonoStarter} from '@alt-javascript/jsmdma-hono';
 import AuditMiddlewareRegistrar from './AuditMiddlewareRegistrar.js';
 
 const context = new Context([

@@ -31,7 +31,7 @@ npm install @alt-javascript/jsmdma-auth-core
 ## JWT Session Contract
 
 ```js
-import {JwtSession} from 'packages/jsmdma-auth-core';
+import {JwtSession} from '@alt-javascript/jsmdma-auth-core';
 
 const session = new JwtSession({secret: process.env.JWT_SECRET});
 
@@ -54,7 +54,7 @@ const payload = await session.verify(token);
 ## Apple Sign In
 
 ```js
-import {AppleProvider} from 'packages/jsmdma-auth-core';
+import {AppleProvider} from '@alt-javascript/jsmdma-auth-core';
 
 const apple = new AppleProvider({
     clientId: 'com.example.app',

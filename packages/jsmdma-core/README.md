@@ -17,7 +17,7 @@ npm install @alt-javascript/jsmdma-core
 ## Quick Example
 
 ```js
-import {SyncClient} from 'packages/jsmdma-core';
+import {SyncClient} from '@alt-javascript/jsmdma-core';
 
 // Restore from storage or start fresh
 const stored = localStorage.getItem('sync-snapshot');
@@ -83,7 +83,7 @@ Hybrid Logical Clock — encodes as a lexicographically orderable hex string usa
 | `HLC.compare(a, b)` | Compare two HLC strings. Returns `-1`, `0`, or `1`. |
 
 ```js
-import {HLC} from 'packages/jsmdma-core';
+import {HLC} from '@alt-javascript/jsmdma-core';
 
 const clock = HLC.create('device-abc', Date.now());
 const next = HLC.tick(clock, Date.now());

@@ -29,10 +29,10 @@ import {
   SyncRepository, SyncService, AppSyncService, SearchService,
   ApplicationRegistry, SchemaValidator, DocumentIndexRepository,
 } from '@alt-javascript/jsmdma-server';
-import { AuthMiddlewareRegistrar } from 'packages/jsmdma-auth-hono';
-import { UserRepository, OrgRepository, OrgService } from 'packages/jsmdma-auth-server';
-import { JwtSession } from 'packages/jsmdma-auth-core';
-import { HLC } from 'packages/jsmdma-core';
+import { AuthMiddlewareRegistrar } from '@alt-javascript/jsmdma-auth-hono';
+import { UserRepository, OrgRepository, OrgService } from '@alt-javascript/jsmdma-auth-server';
+import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
+import { HLC } from '@alt-javascript/jsmdma-core';
 import SearchController from '../SearchController.js';
 import AppSyncController from '../AppSyncController.js';
 

@@ -9,7 +9,7 @@
  *   rev:<uuid>   — fieldRevs map { 'days.2026-03-28.tl': '<hlcString>', ... }
  *   base:<uuid>  — base snapshot (last known server state, for 3-way merge)
  */
-import { HLC, merge } from 'packages/jsmdma-core';
+import { HLC, merge } from '@alt-javascript/jsmdma-core';
 
 export default class SyncClientAdapter {
   /**

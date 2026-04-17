@@ -29,7 +29,7 @@ npm install @alt-javascript/jsmdma-auth-server
 import {
     UserRepository, AuthService,
     OrgRepository, OrgService
-} from 'packages/jsmdma-auth-server';
+} from '@alt-javascript/jsmdma-auth-server';
 
 const context = new Context([
     // ... boot/jsnosqlc config ...

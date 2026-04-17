@@ -14,8 +14,8 @@ import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
 import {
   UserRepository, AuthService,
   OrgRepository, OrgService,
-} from 'packages/jsmdma-auth-server';
-import { JwtSession } from 'packages/jsmdma-auth-core';
+} from '@alt-javascript/jsmdma-auth-server';
+import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 import AuthMiddlewareRegistrar from '../AuthMiddlewareRegistrar.js';
 import OrgController from '../OrgController.js';
 

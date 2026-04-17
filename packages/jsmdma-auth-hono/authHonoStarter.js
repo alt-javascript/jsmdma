@@ -28,7 +28,7 @@
  * route handlers.
  */
 import { UserRepository, AuthService, OrgRepository, OrgService }
-  from 'packages/jsmdma-auth-server';
+  from '@alt-javascript/jsmdma-auth-server';
 import FrameworkErrorContractMiddleware from './FrameworkErrorContractMiddleware.js';
 import AuthMiddlewareRegistrar from './AuthMiddlewareRegistrar.js';
 import AuthController          from './AuthController.js';

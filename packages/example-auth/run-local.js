@@ -41,8 +41,8 @@
 import '@alt-javascript/jsnosqlc-memory';
 import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
-import { jsmdmaHonoStarter } from 'packages/jsmdma-hono';
-import { GoogleProvider, GitHubProvider } from 'packages/jsmdma-auth-core';
+import { jsmdmaHonoStarter } from '@alt-javascript/jsmdma-hono';
+import { GoogleProvider, GitHubProvider } from '@alt-javascript/jsmdma-auth-core';
 import { LoggerFactory } from '@alt-javascript/logger';
 import { fileURLToPath } from 'node:url';
 import CorsMiddlewareRegistrar from './CorsMiddlewareRegistrar.js';
@@ -84,7 +84,7 @@ const SPA_ORIGIN   = process.env.SPA_ORIGIN || 'http://localhost:8080';
 
 const PLANNER_SCHEMA_PATH = fileURLToPath(new URL('../example/schemas/planner.json', import.meta.url));
 const APP_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../example/schemas/planner-preferences.json', import.meta.url));
-const GENERIC_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../server/schemas/preferences.json', import.meta.url));
+const GENERIC_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../jsmdma-server/schemas/preferences.json', import.meta.url));
 
 const APPLICATIONS_CONFIG = {
   'year-planner': {

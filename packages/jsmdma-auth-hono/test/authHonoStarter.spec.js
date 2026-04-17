@@ -16,8 +16,8 @@ import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
 import {
   SyncRepository, SyncService, AppSyncService, ApplicationRegistry, SchemaValidator,
 } from '@alt-javascript/jsmdma-server';
-import { AppSyncController } from 'packages/jsmdma-hono';
-import { JwtSession } from 'packages/jsmdma-auth-core';
+import { AppSyncController } from '@alt-javascript/jsmdma-hono';
+import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 import { authHonoStarter } from '../authHonoStarter.js';
 
 const JWT_SECRET = 'authHonoStarter-test-secret-32!!';

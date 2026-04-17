@@ -1,6 +1,6 @@
 import { assert } from 'chai';
-import { JwtSession } from 'packages/jsmdma-auth-core';
-import { HLC } from 'packages/jsmdma-core';
+import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
+import { HLC } from '@alt-javascript/jsmdma-core';
 import {
   FULL_STACK_JWT_SECRET,
   FULL_STACK_STARTER_OPTIONS,

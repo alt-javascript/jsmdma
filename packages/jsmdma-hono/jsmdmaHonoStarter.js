@@ -24,7 +24,7 @@ import {
   ApplicationRegistry,
   SchemaValidator,
 } from '@alt-javascript/jsmdma-server';
-import { authHonoStarter } from 'packages/jsmdma-auth-hono';
+import { authHonoStarter } from '@alt-javascript/jsmdma-auth-hono';
 import AppSyncController from './AppSyncController.js';
 
 const ALLOWED_OPTION_KEYS = ['features', 'hooks'];

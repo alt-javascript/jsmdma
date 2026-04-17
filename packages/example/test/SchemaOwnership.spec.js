@@ -7,7 +7,7 @@ import SchemaValidator from '../../jsmdma-server/SchemaValidator.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const EXAMPLE_SCHEMAS_DIR = resolve(__dirname, '../schemas');
-const SERVER_SCHEMAS_DIR = resolve(__dirname, '../../server/schemas');
+const SERVER_SCHEMAS_DIR = resolve(__dirname, '../../jsmdma-server/schemas');
 
 const PLANNER_SCHEMA_PATH = resolve(EXAMPLE_SCHEMAS_DIR, 'planner.json');
 const APP_PREFERENCES_SCHEMA_PATH = resolve(EXAMPLE_SCHEMAS_DIR, 'planner-preferences.json');

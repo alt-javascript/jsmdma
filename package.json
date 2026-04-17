@@ -7,11 +7,11 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -w packages/jsmdma-core",
+    "build": "npm run build -w @alt-javascript/jsmdma-core",
     "test": "npm test --workspaces --if-present",
-    "test:core": "npm test -w packages/jsmdma-core",
-    "test:server": "npm test -w packages/jsmdma-server",
-    "test:hono": "npm test -w packages/jsmdma-hono",
+    "test:core": "npm test -w @alt-javascript/jsmdma-core",
+    "test:server": "npm test -w @alt-javascript/jsmdma-server",
+    "test:hono": "npm test -w @alt-javascript/jsmdma-hono",
     "test:example": "npm test -w packages/example"
   },
   "engines": {

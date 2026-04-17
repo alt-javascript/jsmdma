@@ -1,4 +1,4 @@
-// packages/jsmdma-client/test/SyncDocumentStore.spec.js
+// @alt-javascript/jsmdma-client/test/SyncDocumentStore.spec.js
 import { expect } from 'chai';
 import { SyncDocumentStore } from '../SyncDocumentStore.js';
 

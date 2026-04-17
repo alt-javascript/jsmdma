@@ -12,11 +12,11 @@ import { EphemeralConfig } from '@alt-javascript/config';
 import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
 import { DocumentIndexRepository } from '@alt-javascript/jsmdma-server';
-import { AuthMiddlewareRegistrar } from 'packages/jsmdma-auth-hono';
+import { AuthMiddlewareRegistrar } from '@alt-javascript/jsmdma-auth-hono';
 import {
   OrgRepository, OrgService, UserRepository,
-} from 'packages/jsmdma-auth-server';
-import { JwtSession } from 'packages/jsmdma-auth-core';
+} from '@alt-javascript/jsmdma-auth-server';
+import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 import DocIndexController from '../DocIndexController.js';
 
 // ── constants ─────────────────────────────────────────────────────────────────

@@ -20,12 +20,12 @@ import {
   SchemaValidator,
   DocumentIndexRepository,
 } from '@alt-javascript/jsmdma-server';
-import { AuthMiddlewareRegistrar } from 'packages/jsmdma-auth-hono';
+import { AuthMiddlewareRegistrar } from '@alt-javascript/jsmdma-auth-hono';
 import {
   OrgRepository, OrgService, UserRepository,
-} from 'packages/jsmdma-auth-server';
-import { JwtSession } from 'packages/jsmdma-auth-core';
-import { HLC } from 'packages/jsmdma-core';
+} from '@alt-javascript/jsmdma-auth-server';
+import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
+import { HLC } from '@alt-javascript/jsmdma-core';
 import AppSyncController from '../AppSyncController.js';
 
 // ── constants ─────────────────────────────────────────────────────────────────

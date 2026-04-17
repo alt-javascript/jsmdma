@@ -34,10 +34,10 @@ import {
   SyncRepository, SyncService, AppSyncService, ExportService,
   ApplicationRegistry, SchemaValidator, DocumentIndexRepository,
 } from '@alt-javascript/jsmdma-server';
-import { AuthMiddlewareRegistrar } from 'packages/jsmdma-auth-hono';
-import { UserRepository, OrgRepository, OrgService } from 'packages/jsmdma-auth-server';
-import { JwtSession } from 'packages/jsmdma-auth-core';
-import { HLC } from 'packages/jsmdma-core';
+import { AuthMiddlewareRegistrar } from '@alt-javascript/jsmdma-auth-hono';
+import { UserRepository, OrgRepository, OrgService } from '@alt-javascript/jsmdma-auth-server';
+import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
+import { HLC } from '@alt-javascript/jsmdma-core';
 import AppSyncController from '../AppSyncController.js';
 import ExportController  from '../ExportController.js';
 

@@ -33,8 +33,8 @@ npm install @alt-javascript/jsmdma-hono
 import {
     AppSyncController, DocIndexController, SearchController,
     ExportController, DeletionController
-} from 'packages/jsmdma-hono';
-import {AuthMiddlewareRegistrar} from 'packages/jsmdma-auth-hono';
+} from '@alt-javascript/jsmdma-hono';
+import {AuthMiddlewareRegistrar} from '@alt-javascript/jsmdma-auth-hono';
 
 const context = new Context([
     // ... repositories and services ...

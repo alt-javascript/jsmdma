@@ -6,7 +6,7 @@
 import { assert } from 'chai';
 import { DriverManager } from '@alt-javascript/jsnosqlc-core';
 import '@alt-javascript/jsnosqlc-memory'; // self-registers MemoryDriver
-import { HLC } from 'packages/jsmdma-core';
+import { HLC } from '@alt-javascript/jsmdma-core';
 import SyncRepository from '../SyncRepository.js';
 
 async function makeRepo() {

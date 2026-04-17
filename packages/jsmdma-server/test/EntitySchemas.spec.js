@@ -8,7 +8,7 @@
  *   4. Enforces enum constraints where present
  *   5. Rejects additional properties where additionalProperties: false
  *
- * Schema files are loaded from packages/server/schemas/ relative to this file.
+ * Schema files are loaded from packages/jsmdma-server/schemas/ relative to this file.
  */
 import Ajv from 'ajv';
 import { readFileSync } from 'fs';

@@ -16,9 +16,9 @@ import {
   ApplicationRegistry,
   SchemaValidator,
 } from '@alt-javascript/jsmdma-server';
-import { AppSyncController } from 'packages/jsmdma-hono';
-import { UserRepository, AuthService } from 'packages/jsmdma-auth-server';
-import { JwtSession } from 'packages/jsmdma-auth-core';
+import { AppSyncController } from '@alt-javascript/jsmdma-hono';
+import { UserRepository, AuthService } from '@alt-javascript/jsmdma-auth-server';
+import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 import AuthController from '../AuthController.js';
 import AuthMiddlewareRegistrar from '../AuthMiddlewareRegistrar.js';
 

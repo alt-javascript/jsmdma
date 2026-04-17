@@ -28,7 +28,7 @@ npm install @alt-javascript/jsmdma-auth-hono
 import {
     AuthMiddlewareRegistrar, AuthController,
     OrgController
-} from 'packages/jsmdma-auth-hono';
+} from '@alt-javascript/jsmdma-auth-hono';
 
 const context = new Context([
     // ... repositories and services first ...

@@ -13,7 +13,7 @@ npm install @alt-javascript/jsmdma-core
 ```
 
 ```js
-import {SyncClient} from 'packages/jsmdma-core';
+import {SyncClient} from '@alt-javascript/jsmdma-core';
 ```
 
 `SyncClient` has no runtime dependencies beyond the other modules in `packages/core` (HLC, diff, merge). It does not use `localStorage`, `IndexedDB`, `fs`, or any other storage API — persistence is your responsibility (see [Persisting State](#persisting-state)).
@@ -256,7 +256,7 @@ The conflict is **already resolved** in the stored document — the `conflicts` 
 The following example shows a complete offline-first sync loop wiring all the steps together.
 
 ```js
-import {SyncClient} from 'packages/jsmdma-core';
+import {SyncClient} from '@alt-javascript/jsmdma-core';
 
 const AUTH_TOKEN = 'eyJhbGciOiJIUzI1NiJ9...';  // from your auth flow
 const API_BASE = 'https://api.example.com';

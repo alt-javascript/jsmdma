@@ -7,22 +7,22 @@ import {
   SearchController,
   ExportController,
   DeletionController,
-} from 'packages/jsmdma-hono';
+} from '@alt-javascript/jsmdma-hono';
 import {
   SearchService,
   DocumentIndexRepository,
   ExportService,
   DeletionService,
 } from '@alt-javascript/jsmdma-server';
-import { AuthMiddlewareRegistrar, OrgController } from 'packages/jsmdma-auth-hono';
-import { UserRepository, OrgRepository, OrgService } from 'packages/jsmdma-auth-server';
+import { AuthMiddlewareRegistrar, OrgController } from '@alt-javascript/jsmdma-auth-hono';
+import { UserRepository, OrgRepository, OrgService } from '@alt-javascript/jsmdma-auth-server';
 import { fileURLToPath } from 'node:url';
 
 export const FULL_STACK_JWT_SECRET = 'run-apps-jwt-secret-at-least-32chars!';
 
 export const FULL_STACK_PLANNER_SCHEMA_PATH = fileURLToPath(new URL('../schemas/planner.json', import.meta.url));
 export const FULL_STACK_APP_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../schemas/planner-preferences.json', import.meta.url));
-export const FULL_STACK_GENERIC_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../../server/schemas/preferences.json', import.meta.url));
+export const FULL_STACK_GENERIC_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../../jsmdma-server/schemas/preferences.json', import.meta.url));
 
 export const FULL_STACK_APPLICATIONS_CONFIG = {
   todo: {

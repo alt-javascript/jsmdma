@@ -5,9 +5,9 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
-import { jsmdmaHonoStarter } from 'packages/jsmdma-hono';
-import { JwtSession } from 'packages/jsmdma-auth-core';
-import { HLC } from 'packages/jsmdma-core';
+import { jsmdmaHonoStarter } from '@alt-javascript/jsmdma-hono';
+import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
+import { HLC } from '@alt-javascript/jsmdma-core';
 import CorsMiddlewareRegistrar from '../CorsMiddlewareRegistrar.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -17,7 +17,7 @@ const JWT_SECRET = 'run-local-starter-spec-secret-123456';
 
 const PLANNER_SCHEMA_PATH = fileURLToPath(new URL('../../example/schemas/planner.json', import.meta.url));
 const APP_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../../example/schemas/planner-preferences.json', import.meta.url));
-const GENERIC_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../../server/schemas/preferences.json', import.meta.url));
+const GENERIC_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../../jsmdma-server/schemas/preferences.json', import.meta.url));
 
 async function buildRunLocalContext() {
   const config = new EphemeralConfig({
@@ -69,7 +69,7 @@ describe('run-local starter entrypoint regressions (packages/example-auth)', () 
 
     assert.include(source, "const PLANNER_SCHEMA_PATH = fileURLToPath(new URL('../example/schemas/planner.json', import.meta.url));");
     assert.include(source, "const APP_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../example/schemas/planner-preferences.json', import.meta.url));");
-    assert.include(source, "const GENERIC_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../server/schemas/preferences.json', import.meta.url));");
+    assert.include(source, "const GENERIC_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../jsmdma-server/schemas/preferences.json', import.meta.url));");
   });
 
   it('starter boot keeps health up, CORS active, and /year-planner/sync auth-gated', async () => {

@@ -18,7 +18,7 @@
  *   this.applicationRegistry     — ApplicationRegistry instance
  *   this.logger                  — optional logger
  */
-import { HLC } from 'packages/jsmdma-core';
+import { HLC } from '@alt-javascript/jsmdma-core';
 import { namespaceKey } from './namespaceKey.js';
 
 export default class ExportService {

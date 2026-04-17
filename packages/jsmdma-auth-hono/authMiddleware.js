@@ -11,7 +11,7 @@
  *
  * On failure: returns 401 JSON with a typed error body.
  */
-import { JwtSession, IdleExpiredError, HardExpiredError } from 'packages/jsmdma-auth-core';
+import { JwtSession, IdleExpiredError, HardExpiredError } from '@alt-javascript/jsmdma-auth-core';
 
 const UNAUTHORIZED_CODE = 'unauthorized';
 

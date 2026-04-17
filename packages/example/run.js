@@ -23,9 +23,9 @@
 import '@alt-javascript/jsnosqlc-memory';
 import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
-import { jsmdmaHonoStarter } from 'packages/jsmdma-hono';
-import { JwtSession } from 'packages/jsmdma-auth-core';
-import { HLC } from 'packages/jsmdma-core';
+import { jsmdmaHonoStarter } from '@alt-javascript/jsmdma-hono';
+import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
+import { HLC } from '@alt-javascript/jsmdma-core';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
