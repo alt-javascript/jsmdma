@@ -232,10 +232,10 @@ describe('docIndex.json schema', () => {
 
   it('accepts a minimal valid docIndex (no sharedWith, no shareToken)', () => {
     const ok = validate({
-      docKey: 'planner-2024',
+      docKey: 'calendar-2024',
       userId: 'u-1',
-      app: 'year-planner',
-      collection: 'planners',
+      app: 'calendar',
+      collection: 'entries',
       visibility: 'private',
       createdAt: '2024-01-01T00:00:00.000Z',
       updatedAt: '2024-06-01T00:00:00.000Z',
@@ -245,14 +245,14 @@ describe('docIndex.json schema', () => {
 
   it('accepts a full docIndex with sharedWith and shareToken', () => {
     const ok = validate({
-      docKey: 'planner-2025',
+      docKey: 'calendar-2025',
       userId: 'u-1',
-      app: 'year-planner',
-      collection: 'planners',
+      app: 'calendar',
+      collection: 'entries',
       visibility: 'shared',
       sharedWith: [
-        { userId: 'u-2', app: 'year-planner' },
-        { userId: 'u-3', app: 'year-planner' },
+        { userId: 'u-2', app: 'calendar' },
+        { userId: 'u-3', app: 'calendar' },
       ],
       shareToken: 'token-uuid-abc',
       createdAt: '2024-01-01T00:00:00.000Z',
@@ -383,10 +383,10 @@ describe('appConfig.json schema', () => {
 
   it('accepts a valid app+collection config with description and schemaPath', () => {
     const ok = validate({
-      'year-planner': {
-        description: 'Annual planning app',
+      calendar: {
+        description: 'Calendar app',
         collections: {
-          planners: { schemaPath: './schemas/planner.json' },
+          entries: { schemaPath: './schemas/calendar-entry.json' },
         },
       },
       todo: {

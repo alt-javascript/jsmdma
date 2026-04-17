@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PlannerPreferences",
+  "description": "Strict app-owned preferences contract for year-planner UX settings",
+  "type": "object",
+  "required": ["defaultView", "weekStartsOn", "timezone", "showWeekNumbers"],
+  "properties": {
+    "defaultView": {
+      "type": "string",
+      "enum": ["year", "quarter", "month"]
+    },
+    "weekStartsOn": {
+      "type": "string",
+      "enum": ["monday", "sunday"]
+    },
+    "timezone": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "showWeekNumbers": {
+      "type": "boolean"
+    },
+    "locale": {
+      "type": "string",
+      "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+    },
+    "theme": {
+      "type": "string",
+      "enum": ["system", "light", "dark"]
+    }
+  },
+  "additionalProperties": false
+}

@@ -4,7 +4,8 @@
   "description": "Offline-first sync example: two clients diverge offline, sync, converge",
   "type": "module",
   "scripts": {
-    "start": "node run.js"
+    "start": "node run.js",
+    "test": "mocha --recursive test/**/*.spec.js"
   },
   "dependencies": {
     "@alt-javascript/boot": "3.0.7",
