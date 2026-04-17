@@ -23,11 +23,7 @@
 import '@alt-javascript/jsnosqlc-memory';
 import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
-import { honoStarter } from '@alt-javascript/boot-hono';
-import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
-import { SyncRepository, SyncService, ApplicationRegistry, SchemaValidator } from '@alt-javascript/jsmdma-server';
-import { AppSyncController } from '@alt-javascript/jsmdma-hono';
-import { AuthMiddlewareRegistrar } from '@alt-javascript/jsmdma-auth-hono';
+import { jsmdmaHonoStarter } from '@alt-javascript/jsmdma-hono';
 import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 import { HLC } from '@alt-javascript/jsmdma-core';
 
@@ -146,21 +142,11 @@ async function main() {
     'server':       { port: 0 },
     'auth':         { jwt: { secret: JWT_SECRET } },
     'applications': APPLICATIONS_CONFIG,
+    'orgs':         { registerable: false },
   });
 
   const context = new Context([
-    ...honoStarter(),
-    ...jsnosqlcAutoConfiguration(),
-    { Reference: SyncRepository,    name: 'syncRepository',    scope: 'singleton' },
-    { Reference: SyncService,       name: 'syncService',       scope: 'singleton' },
-    { Reference: ApplicationRegistry, name: 'applicationRegistry', scope: 'singleton',
-      properties: [{ name: 'applications', path: 'applications' }] },
-    { Reference: SchemaValidator,   name: 'schemaValidator',   scope: 'singleton',
-      properties: [{ name: 'applications', path: 'applications' }] },
-    // Auth middleware MUST come before AppSyncController
-    { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
-      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
-    { Reference: AppSyncController, name: 'appSyncController', scope: 'singleton' },
+    ...jsmdmaHonoStarter(),
   ]);
 
   const appCtx = new ApplicationContext({ contexts: [context], config });

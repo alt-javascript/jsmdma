@@ -41,19 +41,10 @@
 import '@alt-javascript/jsnosqlc-memory';
 import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
-import { honoStarter } from '@alt-javascript/boot-hono';
-import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
-import {
-  SyncRepository,
-  SyncService,
-  AppSyncService,
-  ApplicationRegistry,
-  SchemaValidator,
-} from '@alt-javascript/jsmdma-server';
-import { AppSyncController } from '@alt-javascript/jsmdma-hono';
-import { authHonoStarter } from '@alt-javascript/jsmdma-auth-hono';
+import { jsmdmaHonoStarter } from '@alt-javascript/jsmdma-hono';
 import { GoogleProvider, GitHubProvider } from '@alt-javascript/jsmdma-auth-core';
 import { LoggerFactory } from '@alt-javascript/logger';
+import { fileURLToPath } from 'node:url';
 import CorsMiddlewareRegistrar from './CorsMiddlewareRegistrar.js';
 
 // ── validate env ──────────────────────────────────────────────────────────────
@@ -91,15 +82,22 @@ const GOOGLE_REDIRECT_URI  = 'http://127.0.0.1:8081/auth/google/callback';
 const GITHUB_REDIRECT_URI  = 'http://127.0.0.1:8081/auth/github/callback';
 const SPA_ORIGIN   = process.env.SPA_ORIGIN || 'http://localhost:8080';
 
+const PLANNER_SCHEMA_PATH = fileURLToPath(new URL('../example/schemas/planner.json', import.meta.url));
+const APP_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../example/schemas/planner-preferences.json', import.meta.url));
+const GENERIC_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../server/schemas/preferences.json', import.meta.url));
+
 const APPLICATIONS_CONFIG = {
   'year-planner': {
     description: 'Year planner application',
     collections: {
       planners: {
-        schemaPath: './packages/server/schemas/planner.json',
+        schemaPath: PLANNER_SCHEMA_PATH,
       },
       preferences: {
-        schemaPath: './packages/server/schemas/preferences.json',
+        schemaPath: GENERIC_PREFERENCES_SCHEMA_PATH,
+      },
+      'planner-preferences': {
+        schemaPath: APP_PREFERENCES_SCHEMA_PATH,
       },
     },
   },
@@ -120,20 +118,12 @@ const context = new Context([
   // Explicit loggerFactory with config so logging.format='text' is respected
   { Reference: LoggerFactory, name: 'loggerFactory', scope: 'singleton',
     constructorArgs: [config] },
-  ...honoStarter(),
-  ...jsnosqlcAutoConfiguration(),
-  { Reference: SyncRepository,    name: 'syncRepository',    scope: 'singleton' },
-  { Reference: SyncService,       name: 'syncService',       scope: 'singleton' },
-  { Reference: AppSyncService,    name: 'appSyncService',    scope: 'singleton' },
-  { Reference: ApplicationRegistry, name: 'applicationRegistry', scope: 'singleton',
-    properties: [{ name: 'applications', path: 'applications' }] },
-  { Reference: SchemaValidator, name: 'schemaValidator', scope: 'singleton',
-    properties: [{ name: 'applications', path: 'applications' }] },
-  // CORS must be first
-  { Reference: CorsMiddlewareRegistrar, name: 'corsMiddlewareRegistrar', scope: 'singleton' },
-  // Full auth stack: AuthMiddlewareRegistrar MUST come before AppSyncController
-  ...authHonoStarter(),
-  { Reference: AppSyncController, name: 'appSyncController', scope: 'singleton' },
+  ...jsmdmaHonoStarter({
+    hooks: {
+      // CORS must stay ahead of auth middleware registration.
+      beforeAuth: [{ Reference: CorsMiddlewareRegistrar, name: 'corsMiddlewareRegistrar', scope: 'singleton' }],
+    },
+  }),
 ]);
 
 const appCtx = new ApplicationContext({ contexts: [context], config });

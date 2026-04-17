@@ -19,16 +19,24 @@
 import '@alt-javascript/jsnosqlc-memory';
 import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
-import { honoStarter } from '@alt-javascript/boot-hono';
-import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
-import { SyncRepository, SyncService, SearchService, ApplicationRegistry, SchemaValidator, DocumentIndexRepository, ExportService, DeletionService } from '@alt-javascript/jsmdma-server';
-import { AppSyncController, DocIndexController, SearchController, ExportController, DeletionController } from '@alt-javascript/jsmdma-hono';
-import { AuthMiddlewareRegistrar, OrgController } from '@alt-javascript/jsmdma-auth-hono';
 import {
-  UserRepository, OrgRepository, OrgService,
-} from '@alt-javascript/jsmdma-auth-server';
+  jsmdmaHonoStarter,
+  DocIndexController,
+  SearchController,
+  ExportController,
+  DeletionController,
+} from '@alt-javascript/jsmdma-hono';
+import {
+  SearchService,
+  DocumentIndexRepository,
+  ExportService,
+  DeletionService,
+} from '@alt-javascript/jsmdma-server';
+import { AuthMiddlewareRegistrar, OrgController } from '@alt-javascript/jsmdma-auth-hono';
+import { UserRepository, OrgRepository, OrgService } from '@alt-javascript/jsmdma-auth-server';
 import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 import { HLC } from '@alt-javascript/jsmdma-core';
+import { fileURLToPath } from 'node:url';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -53,6 +61,10 @@ function banner(text) {
 }
 
 // ── CDI context ───────────────────────────────────────────────────────────────
+
+const PLANNER_SCHEMA_PATH = fileURLToPath(new URL('./schemas/planner.json', import.meta.url));
+const APP_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('./schemas/planner-preferences.json', import.meta.url));
+const GENERIC_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../server/schemas/preferences.json', import.meta.url));
 
 const APPLICATIONS_CONFIG = {
   todo: {
@@ -80,7 +92,13 @@ const APPLICATIONS_CONFIG = {
     description: 'Year planner application',
     collections: {
       planners: {
-        schemaPath: './packages/server/schemas/planner.json',
+        schemaPath: PLANNER_SCHEMA_PATH,
+      },
+      preferences: {
+        schemaPath: GENERIC_PREFERENCES_SCHEMA_PATH,
+      },
+      'planner-preferences': {
+        schemaPath: APP_PREFERENCES_SCHEMA_PATH,
       },
     },
   },
@@ -97,30 +115,22 @@ async function buildApp() {
   });
 
   const context = new Context([
-    ...honoStarter(),
-    ...jsnosqlcAutoConfiguration(),
-    { Reference: SyncRepository,     name: 'syncRepository',     scope: 'singleton' },
-    { Reference: SyncService,        name: 'syncService',        scope: 'singleton' },
-    { Reference: SearchService,      name: 'searchService',      scope: 'singleton' },
-    { Reference: ApplicationRegistry, name: 'applicationRegistry', scope: 'singleton',
-      properties: [{ name: 'applications', path: 'applications' }] },
-    { Reference: SchemaValidator,    name: 'schemaValidator',    scope: 'singleton',
-      properties: [{ name: 'applications', path: 'applications' }] },
-    { Reference: UserRepository,     name: 'userRepository',     scope: 'singleton' },
-    { Reference: OrgRepository,      name: 'orgRepository',      scope: 'singleton' },
-    { Reference: OrgService,         name: 'orgService',         scope: 'singleton' },
-    { Reference: ExportService,      name: 'exportService',      scope: 'singleton' },
-    { Reference: DeletionService,    name: 'deletionService',    scope: 'singleton' },
-    { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
-      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
-    { Reference: DocumentIndexRepository, name: 'documentIndexRepository', scope: 'singleton' },
-    { Reference: AppSyncController,  name: 'appSyncController',  scope: 'singleton' },
-    { Reference: OrgController,      name: 'orgController',      scope: 'singleton',
-      properties: [{ name: 'registerable', path: 'orgs.registerable' }] },
-    { Reference: DocIndexController, name: 'docIndexController', scope: 'singleton' },
-    { Reference: SearchController,   name: 'searchController',   scope: 'singleton' },
-    { Reference: ExportController,   name: 'exportController',   scope: 'singleton' },
-    { Reference: DeletionController, name: 'deletionController', scope: 'singleton' },
+    ...jsmdmaHonoStarter({
+      hooks: {
+        beforeAppSync: [
+          { Reference: DocumentIndexRepository, name: 'documentIndexRepository', scope: 'singleton' },
+          { Reference: SearchService,          name: 'searchService',          scope: 'singleton' },
+          { Reference: ExportService,          name: 'exportService',          scope: 'singleton' },
+          { Reference: DeletionService,        name: 'deletionService',        scope: 'singleton' },
+        ],
+        afterAppSync: [
+          { Reference: DocIndexController, name: 'docIndexController', scope: 'singleton' },
+          { Reference: SearchController,   name: 'searchController',   scope: 'singleton' },
+          { Reference: ExportController,   name: 'exportController',   scope: 'singleton' },
+          { Reference: DeletionController, name: 'deletionController', scope: 'singleton' },
+        ],
+      },
+    }),
   ]);
 
   const appCtx = new ApplicationContext({ contexts: [context], config });
@@ -145,15 +155,23 @@ async function buildAppNoReg() {
   });
 
   const context = new Context([
-    ...honoStarter(),
-    ...jsnosqlcAutoConfiguration(),
-    { Reference: UserRepository,     name: 'userRepository',     scope: 'singleton' },
-    { Reference: OrgRepository,      name: 'orgRepository',      scope: 'singleton' },
-    { Reference: OrgService,         name: 'orgService',         scope: 'singleton' },
-    { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
-      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
-    { Reference: OrgController,      name: 'orgController',      scope: 'singleton' },
-    // OrgController has no registerable property injection → defaults to null → 403
+    ...jsmdmaHonoStarter({
+      features: {
+        sync: false,
+        auth: false,
+        appSyncController: false,
+      },
+      hooks: {
+        beforeSync: [
+          { Reference: UserRepository,         name: 'userRepository',         scope: 'singleton' },
+          { Reference: OrgRepository,          name: 'orgRepository',          scope: 'singleton' },
+          { Reference: OrgService,             name: 'orgService',             scope: 'singleton' },
+          { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
+            properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
+          { Reference: OrgController,          name: 'orgController',          scope: 'singleton' },
+        ],
+      },
+    }),
   ]);
 
   const appCtx = new ApplicationContext({ contexts: [context], config });
@@ -614,6 +632,96 @@ async function main() {
   ok(`  merged meta.name: ${merged.meta.name}`);
   ok(`  merged days entries: ${Object.keys(merged.days).join(', ')}`);
 
+  // ── Scenario 10b: preferences boundary — generic + app-specific ──────────
+
+  banner('Scenario 10b: year-planner preferences boundary (generic permissive + app-specific strict)');
+
+  const t10PrefGeneric = HLC.tick(t10b, Date.now());
+
+  const r10PrefGeneric = await syncPost(app, 'year-planner', {
+    collection:  'preferences',
+    clientClock: HLC.zero(),
+    changes: [{
+      key: 'prefs-generic-1',
+      doc: {
+        widgetState: {
+          filters: {
+            calendar: ['work', 'personal'],
+            score: 999999,
+          },
+        },
+        arbitraryFlag: true,
+        maxBlob: 'x'.repeat(512),
+      },
+      fieldRevs: { widgetState: t10PrefGeneric, arbitraryFlag: t10PrefGeneric, maxBlob: t10PrefGeneric },
+      baseClock: HLC.zero(),
+    }],
+  }, aliceToken);
+
+  assert(r10PrefGeneric.status === 200, `Expected 200 for generic preferences sync, got ${r10PrefGeneric.status}: ${JSON.stringify(r10PrefGeneric.body)}`);
+  ok('year-planner preferences (generic/server-owned) accepts opaque payloads');
+
+  const t10PrefStrictValid = HLC.tick(t10PrefGeneric, Date.now());
+
+  const r10PrefStrictValid = await syncPost(app, 'year-planner', {
+    collection:  'planner-preferences',
+    clientClock: HLC.zero(),
+    changes: [{
+      key: 'prefs-strict-valid',
+      doc: {
+        defaultView: 'year',
+        weekStartsOn: 'monday',
+        timezone: 'Australia/Sydney',
+        showWeekNumbers: true,
+      },
+      fieldRevs: {
+        defaultView: t10PrefStrictValid,
+        weekStartsOn: t10PrefStrictValid,
+        timezone: t10PrefStrictValid,
+        showWeekNumbers: t10PrefStrictValid,
+      },
+      baseClock: HLC.zero(),
+    }],
+  }, aliceToken);
+
+  assert(r10PrefStrictValid.status === 200, `Expected 200 for app-specific planner-preferences sync, got ${r10PrefStrictValid.status}: ${JSON.stringify(r10PrefStrictValid.body)}`);
+  ok('year-planner planner-preferences (app-owned) accepts minimal valid payload');
+
+  const t10PrefStrictInvalid = HLC.tick(t10PrefStrictValid, Date.now());
+
+  const r10PrefStrictInvalid = await syncPost(app, 'year-planner', {
+    collection:  'planner-preferences',
+    clientClock: HLC.zero(),
+    changes: [{
+      key: 'prefs-strict-invalid',
+      doc: {
+        defaultView: 'year',
+        weekStartsOn: 'monday',
+        timezone: 'Australia/Sydney',
+        showWeekNumbers: true,
+        unexpected: 'not-allowed',
+      },
+      fieldRevs: {
+        defaultView: t10PrefStrictInvalid,
+        weekStartsOn: t10PrefStrictInvalid,
+        timezone: t10PrefStrictInvalid,
+        showWeekNumbers: t10PrefStrictInvalid,
+        unexpected: t10PrefStrictInvalid,
+      },
+      baseClock: HLC.zero(),
+    }],
+  }, aliceToken);
+
+  assert(r10PrefStrictInvalid.status === 400, `Expected 400 for invalid planner-preferences payload, got ${r10PrefStrictInvalid.status}: ${JSON.stringify(r10PrefStrictInvalid.body)}`);
+  assert(r10PrefStrictInvalid.body.error === 'Schema validation failed', `Unexpected error: ${r10PrefStrictInvalid.body.error}`);
+  assert(Array.isArray(r10PrefStrictInvalid.body.details), 'Expected schema details array for invalid planner-preferences payload');
+  assert(
+    r10PrefStrictInvalid.body.details.some((detail) => detail.message.includes('additional properties')),
+    `Expected additionalProperties validation detail; got ${JSON.stringify(r10PrefStrictInvalid.body.details)}`,
+  );
+  ok('year-planner planner-preferences rejects out-of-contract fields with schema details (400)');
+  console.log(`  details: ${JSON.stringify(r10PrefStrictInvalid.body.details)}`);
+
   // ── Scenario 11: DocIndex — ownership tracking and share token ───────────
 
   banner('Scenario 11: DocIndex — ownership tracking and share token');
@@ -963,6 +1071,9 @@ async function main() {
   console.log('  ✓ year-planner: valid planner doc syncs cleanly');
   console.log('  ✓ year-planner: invalid planner (missing meta.name) → 400');
   console.log('  ✓ year-planner: two devices edit different days — zero conflicts');
+  console.log('  ✓ year-planner preferences (generic/server-owned) accepts opaque payloads');
+  console.log('  ✓ year-planner planner-preferences (app-owned) accepts minimal valid payload');
+  console.log('  ✓ year-planner planner-preferences rejects out-of-contract fields → 400 with schema details');
   console.log('  ✓ DocIndex ownership entry created on sync write');
   console.log('  ✓ DocIndex GET returns entry with correct userId and visibility');
   console.log('  ✓ DocIndex PATCH updates visibility to shared');
@@ -980,7 +1091,7 @@ async function main() {
   console.log('  ✓ Org export: non-admin (Bob) rejected with 403');
   console.log('  ✓ Account hard-delete: DELETE /account removes user + docs + docIndex; export → 404');
   console.log('  ✓ Org hard-delete: DELETE /orgs/:orgId removes org + docs + members; export → 404');
-  console.log('\n  Multi-app, multi-user, org-scoped sync + docIndex ownership tracking + HTTP org creation + ACL delivery + search ACL scoping + full data export + hard deletion (user + org cascade) working correctly.\n');
+  console.log('\n  Multi-app, multi-user, org-scoped sync + planner schema ownership boundary (generic + app-specific preferences) + docIndex ownership tracking + HTTP org creation + ACL delivery + search ACL scoping + full data export + hard deletion (user + org cascade) working correctly.\n');
 }
 
 main().catch((err) => {
