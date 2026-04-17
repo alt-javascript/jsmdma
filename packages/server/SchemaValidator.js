@@ -38,7 +38,7 @@ import { resolve } from 'path';
 export default class SchemaValidator {
   constructor() {
     this.applications = null; // CDI property-injected
-    this._ajv    = new Ajv({ allErrors: true });
+    this._ajv    = new Ajv({ allErrors: true, allowUnionTypes: true });
     this._cache  = new Map(); // "app:collection" → compiled ajv validate fn | false
   }
 

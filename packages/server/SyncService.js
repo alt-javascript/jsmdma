@@ -34,6 +34,39 @@
 import { HLC, textMerge } from '@alt-javascript/jsmdma-core';
 import { namespaceKey } from './namespaceKey.js';
 
+function isPlainObject(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+/**
+ * Get the effective revision for a top-level field, considering dot-path sub-fields.
+ * e.g. for field 'days', checks 'days' AND all 'days.*' paths, returns the max.
+ */
+function maxRevForField(fieldRevs, field) {
+  let maxRev = fieldRevs[field] ?? HLC.zero();
+  const prefix = field + '.';
+  for (const [path, rev] of Object.entries(fieldRevs)) {
+    if (path.startsWith(prefix) && HLC.compare(rev, maxRev) > 0) {
+      maxRev = rev;
+    }
+  }
+  return maxRev;
+}
+
+/**
+ * Copy all dot-path fieldRevs for a top-level field into the target map.
+ * Also sets the top-level key if topLevelRev is provided.
+ */
+function copyFieldRevs(target, source, field, topLevelRev) {
+  const prefix = field + '.';
+  for (const [path, rev] of Object.entries(source)) {
+    if (path === field || path.startsWith(prefix)) {
+      target[path] = rev;
+    }
+  }
+  if (topLevelRev) target[field] = topLevelRev;
+}
+
 export default class SyncService {
   constructor() {
     // CDI will autowire these; direct injection used in tests
@@ -97,21 +130,21 @@ export default class SyncService {
         mergedFieldRevs = {};
 
         for (const field of allFields) {
-          const clientRev = clientFieldRevs[field] ?? HLC.zero();
-          const serverRev = serverFieldRevs[field] ?? HLC.zero();
+          const clientRev = maxRevForField(clientFieldRevs, field);
+          const serverRev = maxRevForField(serverFieldRevs, field);
 
           const clientChanged = HLC.compare(clientRev, baseHLC) > 0;
           const serverChanged = HLC.compare(serverRev, baseHLC) > 0;
 
           if (!clientChanged && !serverChanged) {
             mergedDoc[field] = serverDoc[field];
-            mergedFieldRevs[field] = serverRev;
+            copyFieldRevs(mergedFieldRevs, serverFieldRevs, field, serverRev);
           } else if (clientChanged && !serverChanged) {
             mergedDoc[field] = doc[field];
-            mergedFieldRevs[field] = clientRev;
+            copyFieldRevs(mergedFieldRevs, clientFieldRevs, field, clientRev);
           } else if (!clientChanged && serverChanged) {
             mergedDoc[field] = serverDoc[field];
-            mergedFieldRevs[field] = serverRev;
+            copyFieldRevs(mergedFieldRevs, serverFieldRevs, field, serverRev);
           } else {
             // Both changed — attempt text auto-merge for string fields first
             const clientVal = doc[field];
@@ -130,6 +163,8 @@ export default class SyncService {
 
               if (autoMerged) {
                 mergedDoc[field] = autoMergedText;
+                copyFieldRevs(mergedFieldRevs, clientFieldRevs, field);
+                copyFieldRevs(mergedFieldRevs, serverFieldRevs, field);
                 mergedFieldRevs[field] = HLC.merge(clientRev, serverRev);
                 allConflicts.push({
                   key,
@@ -147,10 +182,42 @@ export default class SyncService {
               }
             }
 
+            // Object merge: when both sides changed a plain object, merge sub-keys
+            // individually so non-colliding entries from both sides are preserved.
+            if (isPlainObject(clientVal) && isPlainObject(serverVal)) {
+              const mergedObj = {};
+              const allSubKeys = new Set([...Object.keys(clientVal), ...Object.keys(serverVal)]);
+              for (const subKey of allSubKeys) {
+                const subPath = `${field}.${subKey}`;
+                const clientSubRev = maxRevForField(clientFieldRevs, subPath);
+                const serverSubRev = maxRevForField(serverFieldRevs, subPath);
+                const clientSubChanged = HLC.compare(clientSubRev, baseHLC) > 0;
+                const serverSubChanged = HLC.compare(serverSubRev, baseHLC) > 0;
+
+                if (!clientSubChanged && !serverSubChanged) {
+                  if (subKey in serverVal) mergedObj[subKey] = serverVal[subKey];
+                } else if (clientSubChanged && !serverSubChanged) {
+                  if (subKey in clientVal) mergedObj[subKey] = clientVal[subKey];
+                } else if (!clientSubChanged && serverSubChanged) {
+                  if (subKey in serverVal) mergedObj[subKey] = serverVal[subKey];
+                } else {
+                  // Both changed same sub-key — HLC winner
+                  const subWinner = HLC.compare(clientSubRev, serverSubRev) >= 0 ? 'local' : 'remote';
+                  const val = subWinner === 'local' ? clientVal[subKey] : serverVal[subKey];
+                  if (val !== undefined) mergedObj[subKey] = val;
+                }
+              }
+              mergedDoc[field] = mergedObj;
+              copyFieldRevs(mergedFieldRevs, clientFieldRevs, field);
+              copyFieldRevs(mergedFieldRevs, serverFieldRevs, field);
+              mergedFieldRevs[field] = HLC.merge(clientRev, serverRev);
+              continue;
+            }
+
             // HLC fallback — higher rev wins; local wins on tie
             const winner = HLC.compare(clientRev, serverRev) >= 0 ? 'local' : 'remote';
             mergedDoc[field]       = winner === 'local' ? clientVal ?? doc[field] : serverVal ?? serverDoc[field];
-            mergedFieldRevs[field] = winner === 'local' ? clientRev : serverRev;
+            copyFieldRevs(mergedFieldRevs, winner === 'local' ? clientFieldRevs : serverFieldRevs, field, winner === 'local' ? clientRev : serverRev);
 
             allConflicts.push({
               key,
