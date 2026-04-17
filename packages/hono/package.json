@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "@alt-javascript/jsmdma-server": "*",
+    "@alt-javascript/jsmdma-auth-hono": "*",
     "@alt-javascript/boot-hono": "3.0.7",
     "@alt-javascript/boot-jsnosqlc": "3.0.7",
     "@alt-javascript/jsnosqlc-core": "^1.0.1"
@@ -39,7 +40,6 @@
     "@alt-javascript/config": "3.0.7",
     "@alt-javascript/jsnosqlc-memory": "^1.0.1",
     "@alt-javascript/jsmdma-auth-core": "*",
-    "@alt-javascript/jsmdma-auth-hono": "*",
     "@alt-javascript/jsmdma-auth-server": "*",
     "chai": "^4.3.7",
     "mocha": "^11.7.5"
