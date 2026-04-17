@@ -3,6 +3,10 @@ const DEFAULT_STAGE = '$default';
 
 let requestSequence = 0;
 
+export function resetApiGatewayV2EventSequenceForTests() {
+  requestSequence = 0;
+}
+
 function nextRequestId() {
   requestSequence += 1;
   return `req-${String(requestSequence).padStart(6, '0')}`;
