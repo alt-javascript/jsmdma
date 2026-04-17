@@ -92,7 +92,7 @@ describe('authHonoStarter()', () => {
     const body = await res.json();
     assert.property(body, 'authorizationURL');
     assert.property(body, 'state');
-    assert.property(body, 'codeVerifier');
+    assert.notProperty(body, 'codeVerifier');
     assert.include(body.authorizationURL, 'mock.provider');
   });
 

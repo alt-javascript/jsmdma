@@ -202,31 +202,44 @@ The `applications` config block declares which application paths are accepted by
 }
 ```
 
-**CDI context assembly:**
+**Canonical starter (recommended):**
 
 ```js
-import {
-  SyncRepository, SyncService,
-  ApplicationRegistry, SchemaValidator,
-} from '@alt-javascript/jsmdma-server';
-import { AppSyncController } from '@alt-javascript/jsmdma-hono';
-import { AuthMiddlewareRegistrar } from '@alt-javascript/jsmdma-auth-hono';
+import { Context } from '@alt-javascript/cdi';
+import { jsmdmaHonoStarter } from '@alt-javascript/jsmdma-hono';
 
 const context = new Context([
-  ...honoStarter(),
-  ...jsnosqlcAutoConfiguration(),
-  { Reference: SyncRepository,     name: 'syncRepository',     scope: 'singleton' },
-  { Reference: SyncService,        name: 'syncService',        scope: 'singleton' },
-  { Reference: ApplicationRegistry, name: 'applicationRegistry', scope: 'singleton',
-    properties: [{ name: 'applications', path: 'applications' }] },
-  { Reference: SchemaValidator,    name: 'schemaValidator',    scope: 'singleton',
-    properties: [{ name: 'applications', path: 'applications' }] },
-  // Auth middleware MUST come before AppSyncController
-  { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
-    properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
-  { Reference: AppSyncController,  name: 'appSyncController',  scope: 'singleton' },
+  ...jsmdmaHonoStarter(),
 ]);
 ```
+
+**Advanced options (constrained, opt-in):**
+
+```js
+import { Context } from '@alt-javascript/cdi';
+import { jsmdmaHonoStarter } from '@alt-javascript/jsmdma-hono';
+import AuditMiddlewareRegistrar from './AuditMiddlewareRegistrar.js';
+
+const context = new Context([
+  ...jsmdmaHonoStarter({
+    // feature toggles are dependency-validated at startup
+    features: {
+      sync: false,
+      appSyncController: false,
+    },
+    // hooks are stage-scoped; invalid stages/payloads fail fast
+    hooks: {
+      beforeAuth: [{
+        Reference: AuditMiddlewareRegistrar,
+        name: 'auditMiddlewareRegistrar',
+        scope: 'singleton',
+      }],
+    },
+  }),
+]);
+```
+
+Manual CDI assembly is still possible, but the starter is the canonical path because it preserves auth-before-controller ordering and validates unsupported combinations before runtime.
 
 **Storage isolation:**
 Storage keys are namespaced as `{userId}:{application}:{collection}`. Two users posting to the same `/:application/sync` path cannot read each other's documents.
