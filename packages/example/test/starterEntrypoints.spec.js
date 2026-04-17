@@ -5,66 +5,26 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
-import {
-  jsmdmaHonoStarter,
-  DocIndexController,
-  SearchController,
-  ExportController,
-  DeletionController,
-} from '@alt-javascript/jsmdma-hono';
-import {
-  SearchService,
-  DocumentIndexRepository,
-  ExportService,
-  DeletionService,
-} from '@alt-javascript/jsmdma-server';
+import { jsmdmaHonoStarter } from '@alt-javascript/jsmdma-hono';
 import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 import { HLC } from '@alt-javascript/jsmdma-core';
+import {
+  FULL_STACK_JWT_SECRET,
+  FULL_STACK_APPLICATIONS_CONFIG,
+  FULL_STACK_STARTER_OPTIONS,
+  NO_REG_ORG_ONLY_STARTER_OPTIONS,
+  buildFullStackStarterApp,
+  buildFullStackStarterAppNoReg,
+  buildFullStackStarterContext,
+} from '../runtime/fullStackStarterApp.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RUN_JS_PATH = resolve(__dirname, '../run.js');
 const RUN_APPS_PATH = resolve(__dirname, '../run-apps.js');
+const FULL_STACK_RUNTIME_PATH = resolve(__dirname, '../runtime/fullStackStarterApp.js');
 
 const RUN_JS_JWT_SECRET = 'example-jwt-secret-at-least-32-chars!';
-const RUN_APPS_JWT_SECRET = 'run-apps-jwt-secret-at-least-32chars!';
-
-const PLANNER_SCHEMA_PATH = fileURLToPath(new URL('../schemas/planner.json', import.meta.url));
-const APP_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../schemas/planner-preferences.json', import.meta.url));
-const GENERIC_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../../server/schemas/preferences.json', import.meta.url));
-
 const RUN_JS_APPLICATION = 'shared-notes';
-
-const RUN_APPS_APPLICATIONS_CONFIG = {
-  todo: {
-    description: 'To-do lists',
-    collections: {
-      tasks: {
-        schema: {
-          type: 'object',
-          required: ['title'],
-          properties: {
-            title: { type: 'string' },
-            done: { type: 'boolean' },
-            priority: { type: 'string', enum: ['low', 'medium', 'high'] },
-            notes: { type: 'string' },
-          },
-          additionalProperties: false,
-        },
-      },
-    },
-  },
-  'shopping-list': {
-    description: 'Shopping lists (free-form, no schema)',
-  },
-  'year-planner': {
-    description: 'Year planner application',
-    collections: {
-      planners: { schemaPath: PLANNER_SCHEMA_PATH },
-      preferences: { schemaPath: GENERIC_PREFERENCES_SCHEMA_PATH },
-      'planner-preferences': { schemaPath: APP_PREFERENCES_SCHEMA_PATH },
-    },
-  },
-};
 
 async function buildRunJsContext() {
   const config = new EphemeralConfig({
@@ -88,41 +48,6 @@ async function buildRunJsContext() {
   return appCtx;
 }
 
-async function buildRunAppsContext() {
-  const config = new EphemeralConfig({
-    boot: { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
-    logging: { level: { ROOT: 'error' } },
-    server: { port: 0 },
-    auth: { jwt: { secret: RUN_APPS_JWT_SECRET } },
-    applications: RUN_APPS_APPLICATIONS_CONFIG,
-    orgs: { registerable: true },
-  });
-
-  const context = new Context([
-    ...jsmdmaHonoStarter({
-      hooks: {
-        beforeAppSync: [
-          { Reference: DocumentIndexRepository, name: 'documentIndexRepository', scope: 'singleton' },
-          { Reference: SearchService, name: 'searchService', scope: 'singleton' },
-          { Reference: ExportService, name: 'exportService', scope: 'singleton' },
-          { Reference: DeletionService, name: 'deletionService', scope: 'singleton' },
-        ],
-        afterAppSync: [
-          { Reference: DocIndexController, name: 'docIndexController', scope: 'singleton' },
-          { Reference: SearchController, name: 'searchController', scope: 'singleton' },
-          { Reference: ExportController, name: 'exportController', scope: 'singleton' },
-          { Reference: DeletionController, name: 'deletionController', scope: 'singleton' },
-        ],
-      },
-    }),
-  ]);
-
-  const appCtx = new ApplicationContext({ contexts: [context], config });
-  await appCtx.start({ run: false });
-  await appCtx.get('nosqlClient').ready();
-  return appCtx;
-}
-
 async function syncPost(app, application, body, token) {
   const res = await app.request(`/${application}/sync`, {
     method: 'POST',
@@ -134,6 +59,19 @@ async function syncPost(app, application, body, token) {
   });
 
   return { status: res.status, body: await res.json() };
+}
+
+async function expectStartupFailure(factory, expectedMessagePart) {
+  let error = null;
+  try {
+    const appCtx = await factory();
+    await appCtx.stop?.();
+  } catch (err) {
+    error = err;
+  }
+
+  assert.instanceOf(error, Error, 'Expected startup/build to throw');
+  assert.include(error.message, expectedMessagePart);
 }
 
 describe('starter entrypoint regressions (packages/example)', () => {
@@ -152,16 +90,30 @@ describe('starter entrypoint regressions (packages/example)', () => {
       assert.notMatch(source, /from\s*['"]@alt-javascript\/jsmdma-auth-hono['"]/);
     });
 
-    it('run-apps.js keeps starter hooks and dual preferences ownership paths', async () => {
+    it('run-apps.js consumes the shared full-stack starter runtime module', async () => {
       const source = await readFile(RUN_APPS_PATH, 'utf8');
 
-      assert.match(source, /\.\.\.jsmdmaHonoStarter\(\{[\s\S]*hooks:[\s\S]*beforeAppSync:[\s\S]*afterAppSync:[\s\S]*\}\)\s*,/);
+      assert.match(source, /from\s*['"]\.\/runtime\/fullStackStarterApp\.js['"]/);
+      assert.match(source, /buildFullStackStarterApp\s+as\s+buildApp/);
+      assert.match(source, /buildFullStackStarterAppNoReg\s+as\s+buildAppNoReg/);
 
-      assert.include(source, "const APP_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('./schemas/planner-preferences.json', import.meta.url));");
-      assert.include(source, "const GENERIC_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../server/schemas/preferences.json', import.meta.url));");
-      assert.include(source, "'planner-preferences': {");
-      assert.include(source, 'schemaPath: APP_PREFERENCES_SCHEMA_PATH');
-      assert.include(source, 'schemaPath: GENERIC_PREFERENCES_SCHEMA_PATH');
+      // Guard against composition drift back to inline/manual wiring in run-apps.js.
+      assert.notMatch(source, /const\s+APPLICATIONS_CONFIG\s*=\s*\{/);
+      assert.notMatch(source, /const\s+PLANNER_SCHEMA_PATH\s*=/);
+      assert.notMatch(source, /from\s*['"]@alt-javascript\/jsmdma-server['"]/);
+      assert.notMatch(source, /from\s*['"]@alt-javascript\/jsmdma-auth-server['"]/);
+    });
+
+    it('shared runtime module owns full-stack hooks, schema paths, and no-reg starter options', async () => {
+      const source = await readFile(FULL_STACK_RUNTIME_PATH, 'utf8');
+
+      assert.include(source, 'export const FULL_STACK_APPLICATIONS_CONFIG');
+      assert.include(source, 'export const FULL_STACK_STARTER_OPTIONS');
+      assert.include(source, 'beforeAppSync');
+      assert.include(source, 'afterAppSync');
+      assert.include(source, 'export const NO_REG_ORG_ONLY_STARTER_OPTIONS');
+      assert.include(source, 'includeOrgsRegisterable: false');
+      assert.include(source, 'buildFullStackStarterAppNoReg');
     });
   });
 
@@ -192,16 +144,14 @@ describe('starter entrypoint regressions (packages/example)', () => {
     });
 
     it('run-apps composition keeps preference boundary checks and hook-mounted routes live', async () => {
-      const appCtx = await buildRunAppsContext();
+      const { app, appCtx } = await buildFullStackStarterApp();
       try {
-        const app = appCtx.get('honoAdapter').app;
-
         const health = await app.request('/health');
         assert.equal(health.status, 200);
 
         const token = await JwtSession.sign(
           { sub: 'starter-entrypoint-user', providers: ['test'] },
-          RUN_APPS_JWT_SECRET,
+          FULL_STACK_JWT_SECRET,
         );
 
         const opaqueClock = HLC.tick(HLC.zero(), Date.now());
@@ -274,6 +224,91 @@ describe('starter entrypoint regressions (packages/example)', () => {
       } finally {
         await appCtx.stop?.();
       }
+    });
+
+    it('no-reg helper keeps POST /orgs deterministic at 403 when orgs.registerable is absent', async () => {
+      const { app, appCtx } = await buildFullStackStarterAppNoReg();
+      try {
+        const token = await JwtSession.sign(
+          { sub: 'starter-no-reg-user', providers: ['test'] },
+          FULL_STACK_JWT_SECRET,
+        );
+
+        const userRepo = appCtx.get('userRepository');
+        await userRepo._users().store('starter-no-reg-user', {
+          userId: 'starter-no-reg-user',
+          email: 'starter-no-reg-user@example.com',
+          providers: ['test'],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+
+        const res = await app.request('/orgs', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ name: 'starter-no-reg-org' }),
+        });
+
+        assert.equal(res.status, 403);
+        const body = await res.json();
+        assert.equal(body.error, 'Organisation registration is disabled on this instance.');
+      } finally {
+        await appCtx.stop?.();
+      }
+    });
+  });
+
+  describe('failure contracts', () => {
+    it('fails fast on malformed hook descriptors', async () => {
+      await expectStartupFailure(
+        () => buildFullStackStarterContext({
+          starterOptions: {
+            hooks: {
+              beforeAppSync: [{ name: 'missingReference' }],
+            },
+          },
+        }),
+        'hooks.beforeAppSync[0] registration object must include Reference',
+      );
+    });
+
+    it('fails fast on missing required applications config path', async () => {
+      await expectStartupFailure(
+        () => buildFullStackStarterContext({ applicationsConfig: null }),
+        'Missing or invalid config at applications',
+      );
+    });
+  });
+
+  describe('shared composition invariants', () => {
+    it('exports hook stages used by run-apps and future lambda entrypoints', () => {
+      assert.containsAllKeys(FULL_STACK_STARTER_OPTIONS, ['hooks']);
+      assert.containsAllKeys(FULL_STACK_STARTER_OPTIONS.hooks, ['beforeAppSync', 'afterAppSync']);
+      assert.isAbove(FULL_STACK_STARTER_OPTIONS.hooks.beforeAppSync.length, 0);
+      assert.isAbove(FULL_STACK_STARTER_OPTIONS.hooks.afterAppSync.length, 0);
+    });
+
+    it('exports applications config with planner + preferences ownership boundary', () => {
+      assert.containsAllKeys(FULL_STACK_APPLICATIONS_CONFIG, ['todo', 'shopping-list', 'year-planner']);
+
+      const yearPlanner = FULL_STACK_APPLICATIONS_CONFIG['year-planner'];
+      assert.isObject(yearPlanner.collections);
+      assert.containsAllKeys(yearPlanner.collections, ['planners', 'preferences', 'planner-preferences']);
+      assert.isString(yearPlanner.collections.preferences.schemaPath);
+      assert.isString(yearPlanner.collections['planner-preferences'].schemaPath);
+    });
+
+    it('exports deterministic org-only no-reg starter options', () => {
+      assert.deepEqual(NO_REG_ORG_ONLY_STARTER_OPTIONS.features, {
+        sync: false,
+        auth: false,
+        appSyncController: false,
+      });
+      assert.isArray(NO_REG_ORG_ONLY_STARTER_OPTIONS.hooks.beforeSync);
+      assert.isAbove(NO_REG_ORG_ONLY_STARTER_OPTIONS.hooks.beforeSync.length, 0);
     });
   });
 });

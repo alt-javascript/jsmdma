@@ -17,30 +17,15 @@
  */
 
 import '@alt-javascript/jsnosqlc-memory';
-import { Context, ApplicationContext } from '@alt-javascript/cdi';
-import { EphemeralConfig } from '@alt-javascript/config';
-import {
-  jsmdmaHonoStarter,
-  DocIndexController,
-  SearchController,
-  ExportController,
-  DeletionController,
-} from '@alt-javascript/jsmdma-hono';
-import {
-  SearchService,
-  DocumentIndexRepository,
-  ExportService,
-  DeletionService,
-} from '@alt-javascript/jsmdma-server';
-import { AuthMiddlewareRegistrar, OrgController } from '@alt-javascript/jsmdma-auth-hono';
-import { UserRepository, OrgRepository, OrgService } from '@alt-javascript/jsmdma-auth-server';
 import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 import { HLC } from '@alt-javascript/jsmdma-core';
-import { fileURLToPath } from 'node:url';
+import {
+  FULL_STACK_JWT_SECRET as JWT_SECRET,
+  buildFullStackStarterApp as buildApp,
+  buildFullStackStarterAppNoReg as buildAppNoReg,
+} from './runtime/fullStackStarterApp.js';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-
-const JWT_SECRET = 'run-apps-jwt-secret-at-least-32chars!';
 
 function ok(message) {
   console.log(`  ✓ ${message}`);
@@ -60,127 +45,7 @@ function banner(text) {
   console.log(`\n${line}\n  ${text}\n${line}`);
 }
 
-// ── CDI context ───────────────────────────────────────────────────────────────
-
-const PLANNER_SCHEMA_PATH = fileURLToPath(new URL('./schemas/planner.json', import.meta.url));
-const APP_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('./schemas/planner-preferences.json', import.meta.url));
-const GENERIC_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../server/schemas/preferences.json', import.meta.url));
-
-const APPLICATIONS_CONFIG = {
-  todo: {
-    description: 'To-do lists',
-    collections: {
-      tasks: {
-        schema: {
-          type:     'object',
-          required: ['title'],
-          properties: {
-            title:     { type: 'string' },
-            done:      { type: 'boolean' },
-            priority:  { type: 'string', enum: ['low', 'medium', 'high'] },
-            notes:     { type: 'string' },
-          },
-          additionalProperties: false,
-        },
-      },
-    },
-  },
-  'shopping-list': {
-    description: 'Shopping lists (free-form, no schema)',
-  },
-  'year-planner': {
-    description: 'Year planner application',
-    collections: {
-      planners: {
-        schemaPath: PLANNER_SCHEMA_PATH,
-      },
-      preferences: {
-        schemaPath: GENERIC_PREFERENCES_SCHEMA_PATH,
-      },
-      'planner-preferences': {
-        schemaPath: APP_PREFERENCES_SCHEMA_PATH,
-      },
-    },
-  },
-};
-
-async function buildApp() {
-  const config = new EphemeralConfig({
-    'boot':         { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
-    'logging':      { level: { ROOT: 'error' } },
-    'server':       { port: 0 },
-    'auth':         { jwt: { secret: JWT_SECRET } },
-    'applications': APPLICATIONS_CONFIG,
-    'orgs':         { registerable: true },
-  });
-
-  const context = new Context([
-    ...jsmdmaHonoStarter({
-      hooks: {
-        beforeAppSync: [
-          { Reference: DocumentIndexRepository, name: 'documentIndexRepository', scope: 'singleton' },
-          { Reference: SearchService,          name: 'searchService',          scope: 'singleton' },
-          { Reference: ExportService,          name: 'exportService',          scope: 'singleton' },
-          { Reference: DeletionService,        name: 'deletionService',        scope: 'singleton' },
-        ],
-        afterAppSync: [
-          { Reference: DocIndexController, name: 'docIndexController', scope: 'singleton' },
-          { Reference: SearchController,   name: 'searchController',   scope: 'singleton' },
-          { Reference: ExportController,   name: 'exportController',   scope: 'singleton' },
-          { Reference: DeletionController, name: 'deletionController', scope: 'singleton' },
-        ],
-      },
-    }),
-  ]);
-
-  const appCtx = new ApplicationContext({ contexts: [context], config });
-  await appCtx.start({ run: false });
-  await appCtx.get('nosqlClient').ready();
-
-  return { app: appCtx.get('honoAdapter').app, appCtx };
-}
-
-/**
- * Minimal app variant with org registration DISABLED — used in Scenario 12 to
- * verify that POST /orgs returns 403 when orgs.registerable is absent.
- */
-async function buildAppNoReg() {
-  const config = new EphemeralConfig({
-    'boot':         { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
-    'logging':      { level: { ROOT: 'error' } },
-    'server':       { port: 0 },
-    'auth':         { jwt: { secret: JWT_SECRET } },
-    'applications': APPLICATIONS_CONFIG,
-    // 'orgs' key intentionally absent → OrgController.registerable stays null → 403
-  });
-
-  const context = new Context([
-    ...jsmdmaHonoStarter({
-      features: {
-        sync: false,
-        auth: false,
-        appSyncController: false,
-      },
-      hooks: {
-        beforeSync: [
-          { Reference: UserRepository,         name: 'userRepository',         scope: 'singleton' },
-          { Reference: OrgRepository,          name: 'orgRepository',          scope: 'singleton' },
-          { Reference: OrgService,             name: 'orgService',             scope: 'singleton' },
-          { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
-            properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
-          { Reference: OrgController,          name: 'orgController',          scope: 'singleton' },
-        ],
-      },
-    }),
-  ]);
-
-  const appCtx = new ApplicationContext({ contexts: [context], config });
-  await appCtx.start({ run: false });
-  await appCtx.get('nosqlClient').ready();
-
-  return { app: appCtx.get('honoAdapter').app, appCtx };
-}
-
+// ── Shared starter composition ───────────────────────────────────────────────
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
 
 async function orgPost(app, body, token) {
