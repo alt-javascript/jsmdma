@@ -57,85 +57,71 @@ alt-javascript/boot CDI ecosystem. Core properties:
 
 ## 3. CDI Context Setup
 
-CDI registration order is load-order significant in Hono — middleware is
-registered in insertion order. The rules are:
+Use `jsmdmaHonoStarter()` as the canonical composition entrypoint for year-planner.
+It bakes in safe registration order (boot infra, sync/auth services, auth middleware,
+then controllers), and exposes hook stages for app-specific extensions.
 
-1. `jsnosqlcAutoConfiguration()` and `honoStarter()` must come first.
-2. `AuthMiddlewareRegistrar` must be registered **before** any controllers.
-3. `DocumentIndexRepository` must be registered **before** `AppSyncController`
-   (CDI autowires by name match at start time).
-4. `OrgController` needs `properties: [{ name: 'registerable', path: 'orgs.registerable' }]`
-   if you want HTTP org creation to be enabled; omit or leave the config key
-   absent to return 403 for all POST /orgs requests.
-
-### Minimal Context for year-planner
+### Starter-first Context for year-planner
 
 ```js
-import '@alt-javascript/jsnosqlc-memory';          // or your prod driver
+import '@alt-javascript/jsnosqlc-memory';
 import { Context, ApplicationContext } from '@alt-javascript/cdi';
-import { EphemeralConfig }             from '@alt-javascript/config';
-import { honoStarter }                 from '@alt-javascript/boot-hono';
-import { jsnosqlcAutoConfiguration }   from '@alt-javascript/boot-jsnosqlc';
+import { EphemeralConfig } from '@alt-javascript/config';
 import {
-  SyncRepository, SyncService,
-  ApplicationRegistry, SchemaValidator,
+  jsmdmaHonoStarter,
+  DocIndexController,
+  SearchController,
+  ExportController,
+  DeletionController,
+} from '@alt-javascript/jsmdma-hono';
+import {
   DocumentIndexRepository,
+  SearchService,
+  ExportService,
+  DeletionService,
 } from '@alt-javascript/jsmdma-server';
-import { AppSyncController, DocIndexController } from '@alt-javascript/jsmdma-hono';
-import { AuthMiddlewareRegistrar, OrgController } from '@alt-javascript/jsmdma-auth-hono';
-import { UserRepository, OrgRepository, OrgService } from '@alt-javascript/jsmdma-auth-server';
-
-const JWT_SECRET = process.env.JWT_SECRET; // ≥ 32 chars
 
 const config = new EphemeralConfig({
   boot:         { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
   logging:      { level: { ROOT: 'error' } },
   server:       { port: 3000 },
-  auth:         { jwt: { secret: JWT_SECRET } },
-  applications: APPLICATIONS_CONFIG,     // see Section 4
-  orgs:         { registerable: true },  // remove to disable HTTP org creation
+  auth:         { jwt: { secret: process.env.JWT_SECRET } },
+  applications: APPLICATIONS_CONFIG,    // see Section 4
+  orgs:         { registerable: true },
 });
 
 const context = new Context([
-  // 1. Infrastructure — must be first
-  ...honoStarter(),
-  ...jsnosqlcAutoConfiguration(),
-
-  // 2. Sync layer
-  { Reference: SyncRepository,      name: 'syncRepository',      scope: 'singleton' },
-  { Reference: SyncService,         name: 'syncService',         scope: 'singleton' },
-  { Reference: ApplicationRegistry, name: 'applicationRegistry', scope: 'singleton',
-    properties: [{ name: 'applications', path: 'applications' }] },
-  { Reference: SchemaValidator,     name: 'schemaValidator',     scope: 'singleton',
-    properties: [{ name: 'applications', path: 'applications' }] },
-
-  // 3. Auth layer
-  { Reference: UserRepository, name: 'userRepository', scope: 'singleton' },
-  { Reference: OrgRepository,  name: 'orgRepository',  scope: 'singleton' },
-  { Reference: OrgService,     name: 'orgService',     scope: 'singleton' },
-
-  // 4. Auth middleware — MUST precede all controllers
-  { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
-    properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
-
-  // 5. DocIndex — MUST precede AppSyncController
-  { Reference: DocumentIndexRepository, name: 'documentIndexRepository', scope: 'singleton' },
-
-  // 6. Controllers
-  { Reference: AppSyncController,  name: 'appSyncController',  scope: 'singleton' },
-  { Reference: OrgController,      name: 'orgController',      scope: 'singleton',
-    properties: [{ name: 'registerable', path: 'orgs.registerable' }] },
-  { Reference: DocIndexController, name: 'docIndexController', scope: 'singleton' },
+  ...jsmdmaHonoStarter({
+    hooks: {
+      // Add app services before AppSyncController is registered
+      beforeAppSync: [
+        { Reference: DocumentIndexRepository, name: 'documentIndexRepository', scope: 'singleton' },
+        { Reference: SearchService,          name: 'searchService',          scope: 'singleton' },
+        { Reference: ExportService,          name: 'exportService',          scope: 'singleton' },
+        { Reference: DeletionService,        name: 'deletionService',        scope: 'singleton' },
+      ],
+      // Add controllers after AppSyncController + auth middleware are in place
+      afterAppSync: [
+        { Reference: DocIndexController, name: 'docIndexController', scope: 'singleton' },
+        { Reference: SearchController,   name: 'searchController',   scope: 'singleton' },
+        { Reference: ExportController,   name: 'exportController',   scope: 'singleton' },
+        { Reference: DeletionController, name: 'deletionController', scope: 'singleton' },
+      ],
+    },
+  }),
 ]);
 
 const appCtx = new ApplicationContext({ contexts: [context], config });
-await appCtx.start({ run: false }); // run:false = don't bind a port (useful in tests)
+await appCtx.start({ run: false });
 await appCtx.get('nosqlClient').ready();
-
-const app = appCtx.get('honoAdapter').app;  // Hono instance — pass to your server
 ```
 
-For a complete working example, see `packages/example/run-apps.js` lines 83–120.
+Hook stage reminders:
+- `beforeAuth`: middleware that must execute before auth guards (for example the CORS hook in `packages/example-auth/run-local.js`)
+- `beforeAppSync`: additional services required by app-level controllers
+- `afterAppSync`: app-level controllers mounted after sync/auth baseline wiring
+
+For complete starter-based examples, see `packages/example/run-apps.js`, `packages/example/run.js`, and `packages/example-auth/run-local.js`.
 
 ---
 
@@ -187,12 +173,24 @@ const APPLICATIONS_CONFIG = {
 ### With schemaPath (load from disk)
 
 ```js
+import { fileURLToPath } from 'node:url';
+
+const PLANNER_SCHEMA_PATH = fileURLToPath(new URL('../example/schemas/planner.json', import.meta.url));
+const APP_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../example/schemas/planner-preferences.json', import.meta.url));
+const GENERIC_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../server/schemas/preferences.json', import.meta.url));
+
 const APPLICATIONS_CONFIG = {
   'year-planner': {
     description: 'Year planner documents',
     collections: {
       planners: {
-        schemaPath: './schemas/planner.json',  // relative to server CWD
+        schemaPath: PLANNER_SCHEMA_PATH,
+      },
+      preferences: {
+        schemaPath: GENERIC_PREFERENCES_SCHEMA_PATH,
+      },
+      'planner-preferences': {
+        schemaPath: APP_PREFERENCES_SCHEMA_PATH,
       },
     },
   },
@@ -200,7 +198,10 @@ const APPLICATIONS_CONFIG = {
 ```
 
 Use `schemaPath` when the schema is large or shared between projects.
-The canonical server-side schema files live in `packages/server/schemas/`.
+For year-planner, schema ownership is split intentionally:
+- app-owned planner contracts live in `packages/example/schemas/` (`planner.json`, `planner-preferences.json`)
+- generic server-owned preferences remain in `packages/server/schemas/preferences.json`
+
 Omit the `schema` / `schemaPath` key entirely to accept free-form documents
 (no validation).
 
@@ -485,6 +486,7 @@ const order = HLC.compare(a, b);
 | `packages/example/run-apps.js` | Working end-to-end scenarios — Scenario 3 (valid sync), 5 (text auto-merge), 7 (org sync), 8–10 (year-planner + schema validation + conflict-free multi-device edit), 11 (DocIndex + share token), 12 (HTTP org creation), 13 (ACL delivery: shared doc in sync), 14 (search ACL scoping), 15 (user export), 16 (org export), 17 (user hard-delete → 404), 18 (org hard-delete → 404) |
 | `docs/openapi.yaml` | Machine-readable OpenAPI 3.1 spec for all 23 endpoints |
 | `docs/data-model.md` | Entity model, storage key patterns, ER diagrams, sharing model, export envelopes, and deletion cascade |
-| `packages/server/schemas/` | Server-side JSON Schema files: `appConfig.json`, `docIndex.json`, `org.json`, `orgMember.json`, `user.json` |
+| `packages/example/schemas/` | App-owned year-planner contracts: `planner.json`, `planner-preferences.json` |
+| `packages/server/schemas/` | Shared server-side schemas: `preferences.json`, `appConfig.json`, `docIndex.json`, `org.json`, `orgMember.json`, `user.json` |
 | `packages/core/index.js` | Public exports: `HLC`, `diff`, `merge`, `textMerge` |
 | `packages/auth-core/` | `JwtSession` — JWT mint/verify helpers |

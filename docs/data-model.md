@@ -31,6 +31,8 @@ jsmdma is an offline-first, bidirectional sync API. Clients maintain local data 
 
 Both modes share the same sync API. Org-enabled mode adds `Org`, `OrgMember`, and `OrgNameIndex` entities and an org-scoped document storage namespace (`org:{orgId}:{app}:{collection}`).
 
+Runtime wiring guidance: compose Hono/CDI through `jsmdmaHonoStarter()` (with hook stages for app-specific extensions) rather than manually assembling sync/auth registrars. See `docs/year-planner-integration.md` for starter-first examples.
+
 ---
 
 ## 2. Operating Modes
@@ -44,7 +46,9 @@ Config shape — only the `applications` block is required:
   applications: {
     'year-planner': {
       collections: {
-        planners: { schemaPath: './schemas/planner.json' }
+        planners: { schemaPath: './packages/example/schemas/planner.json' },
+        preferences: { schemaPath: './packages/server/schemas/preferences.json' },
+        'planner-preferences': { schemaPath: './packages/example/schemas/planner-preferences.json' }
       }
     },
     todo: {
@@ -58,6 +62,10 @@ Config shape — only the `applications` block is required:
 
 All documents belong to the authenticated user. Storage keys are namespaced as `{userId}:{app}:{collection}`.
 
+For year-planner, this config intentionally preserves dual preferences ownership:
+- `preferences` points to the shared generic server schema (`packages/server/schemas/preferences.json`)
+- `planner-preferences` points to an app-owned strict schema (`packages/example/schemas/planner-preferences.json`)
+
 ### Org-Enabled Mode
 
 Config shape — add an `orgs` block alongside `applications`:
@@ -67,7 +75,9 @@ Config shape — add an `orgs` block alongside `applications`:
   applications: {
     'year-planner': {
       collections: {
-        planners: { schemaPath: './schemas/planner.json' }
+        planners: { schemaPath: './packages/example/schemas/planner.json' },
+        preferences: { schemaPath: './packages/server/schemas/preferences.json' },
+        'planner-preferences': { schemaPath: './packages/example/schemas/planner-preferences.json' }
       }
     }
   },
