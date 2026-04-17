@@ -23,6 +23,43 @@
  *   this.providers       — { [providerName]: providerInstance } map
  *   this.logger          — optional logger
  */
+const ERROR_CODE_BY_STATUS = Object.freeze({
+  400: 'bad_request',
+  401: 'unauthorized',
+  403: 'forbidden',
+  404: 'not_found',
+  409: 'conflict',
+  500: 'internal_error',
+});
+
+function errorCodeForStatus(statusCode) {
+  if (ERROR_CODE_BY_STATUS[statusCode]) {
+    return ERROR_CODE_BY_STATUS[statusCode];
+  }
+  if (statusCode >= 500) return 'internal_error';
+  if (statusCode >= 400) return 'request_error';
+  return 'unknown_error';
+}
+
+function failure(statusCode, error, extras = {}) {
+  return {
+    statusCode,
+    body: {
+      error,
+      code: errorCodeForStatus(statusCode),
+      ...extras,
+    },
+  };
+}
+
+function hasNonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isPlainObject(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
 export default class AuthController {
   static __routes = [
     // Static routes first — prevents /auth/:provider from matching these
@@ -57,7 +94,7 @@ export default class AuthController {
    */
   me(request) {
     const user = this._getUser(request);
-    if (!user) return { statusCode: 401, body: { error: 'Unauthorized' } };
+    if (!user) return failure(401, 'Unauthorized');
     return {
       userId:    user.sub,
       email:     user.email ?? null,
@@ -81,37 +118,57 @@ export default class AuthController {
    */
   async linkProvider(request) {
     const user = this._getUser(request);
-    if (!user) return { statusCode: 401, body: { error: 'Unauthorized' } };
+    if (!user) return failure(401, 'Unauthorized');
 
     const { provider } = request.params;
-    const instance     = this.providers[provider];
-    if (!instance) return { statusCode: 400, body: { error: `Unknown provider: ${provider}` } };
+    const instance = this.providers[provider];
+    if (!instance) return failure(400, `Unknown provider: ${provider}`);
 
     const { code, state, stored_state: storedState, code_verifier: codeVerifier } = request.query;
     if (!code || !state || !storedState) {
-      return { statusCode: 400, body: { error: 'Missing required query params: code, state, stored_state' } };
+      return failure(400, 'Missing required query params: code, state, stored_state');
     }
 
     if (state !== storedState) {
-      return { statusCode: 400, body: { error: 'OAuth state mismatch' } };
+      return failure(400, 'OAuth state mismatch');
     }
 
     let callbackResult;
     try {
       callbackResult = await instance.validateCallback(code, codeVerifier ?? '');
     } catch (err) {
-      return { statusCode: 500, body: { error: `Provider error: ${err.message}` } };
+      this.logger?.error?.(`[AuthController] linkProvider callback failed for provider=${provider}: ${err?.message ?? err}`);
+      return failure(500, 'Provider callback failed');
+    }
+
+    if (!isPlainObject(callbackResult) || !hasNonEmptyString(callbackResult.providerUserId)) {
+      this.logger?.error?.(`[AuthController] linkProvider callback returned malformed payload for provider=${provider}`);
+      return failure(500, 'Provider callback failed');
     }
 
     const { providerUserId } = callbackResult;
 
-    // Check if this providerUserId is already linked to any user
-    const existingUser = await this.userRepository.findByProvider(provider, providerUserId);
-    if (existingUser) {
-      return { statusCode: 409, body: { error: 'This provider account is already linked to another user' } };
+    let existingUser;
+    try {
+      existingUser = await this.userRepository.findByProvider(provider, providerUserId);
+    } catch (err) {
+      this.logger?.error?.(`[AuthController] linkProvider findByProvider failed: ${err?.message ?? err}`);
+      return failure(500, 'Provider link failed');
     }
 
-    const updatedUser = await this.userRepository.addProvider(user.sub, provider, providerUserId);
+    // Check if this providerUserId is already linked to any user
+    if (existingUser) {
+      return failure(409, 'This provider account is already linked to another user');
+    }
+
+    let updatedUser;
+    try {
+      updatedUser = await this.userRepository.addProvider(user.sub, provider, providerUserId);
+    } catch (err) {
+      this.logger?.error?.(`[AuthController] linkProvider addProvider failed: ${err?.message ?? err}`);
+      return failure(500, 'Provider link failed');
+    }
+
     this.logger?.info?.(`[AuthController] linkProvider userId=${user.sub} provider=${provider}`);
     return { user: updatedUser };
   }
@@ -123,15 +180,15 @@ export default class AuthController {
    */
   async unlinkProvider(request) {
     const user = this._getUser(request);
-    if (!user) return { statusCode: 401, body: { error: 'Unauthorized' } };
+    if (!user) return failure(401, 'Unauthorized');
 
     const { provider } = request.params;
 
     const fullUser = await this.userRepository.getUser(user.sub);
-    if (!fullUser) return { statusCode: 404, body: { error: 'User not found' } };
+    if (!fullUser) return failure(404, 'User not found');
 
     if (fullUser.providers.length <= 1) {
-      return { statusCode: 409, body: { error: 'Cannot remove last provider — you would be locked out' } };
+      return failure(409, 'Cannot remove last provider — you would be locked out');
     }
 
     const updatedUser = await this.userRepository.removeProvider(user.sub, provider);
@@ -141,12 +198,12 @@ export default class AuthController {
 
   /**
    * GET /auth/:provider
-   * Initiates OAuth flow. Returns { authorizationURL, state, codeVerifier }.
+   * Initiates OAuth flow. Returns { authorizationURL, state }.
    */
   beginAuth(request) {
     const { provider } = request.params;
-    const instance     = this.providers[provider];
-    if (!instance) return { statusCode: 400, body: { error: `Unknown provider: ${provider}` } };
+    const instance = this.providers[provider];
+    if (!instance) return failure(400, `Unknown provider: ${provider}`);
 
     const options = {};
     if (request.query?.link === 'true') options.link = true;
@@ -161,32 +218,42 @@ export default class AuthController {
    * Completes OAuth flow. Redirects browser to {spaOrigin}/?token=<jwt>.
    */
   async completeAuth(request) {
-    const { provider }  = request.params;
-    const instance      = this.providers[provider];
-    if (!instance) return { statusCode: 400, body: { error: `Unknown provider: ${provider}` } };
+    const { provider } = request.params;
+    const instance = this.providers[provider];
+    if (!instance) return failure(400, `Unknown provider: ${provider}`);
 
     const { code, state } = request.query;
     if (!code || !state) {
-      return { statusCode: 400, body: { error: 'Missing required query params: code, state' } };
+      return failure(400, 'Missing required query params: code, state');
     }
 
     try {
       const result = await this.authService.completeAuth(provider, instance, code, state);
 
       // Link mode: redirect to SPA with code instead of token
-      if (result.linkMode) {
+      if (result?.linkMode) {
+        if (!hasNonEmptyString(result.code) || !hasNonEmptyString(result.state) || !hasNonEmptyString(result.codeVerifier)) {
+          this.logger?.error?.(`[AuthController] completeAuth returned malformed link-mode payload for provider=${provider}`);
+          return failure(500, 'Authentication failed');
+        }
+
         const redirectUrl = `${this.spaOrigin ?? ''}/?code=${encodeURIComponent(result.code)}&state=${encodeURIComponent(result.state)}&code_verifier=${encodeURIComponent(result.codeVerifier)}`;
         this.logger?.info?.(`[AuthController] completeAuth linkMode provider=${provider} — forwarding code to SPA`);
         return { redirect: redirectUrl, statusCode: 302 };
       }
 
+      if (!hasNonEmptyString(result?.token)) {
+        this.logger?.error?.(`[AuthController] completeAuth returned payload without token for provider=${provider}`);
+        return failure(500, 'Authentication failed');
+      }
+
       const redirectUrl = `${this.spaOrigin ?? ''}/?token=${encodeURIComponent(result.token)}`;
-      this.logger?.info?.(`[AuthController] completeAuth provider=${provider} userId=${result.user.userId}`);
+      this.logger?.info?.(`[AuthController] completeAuth provider=${provider} userId=${result?.user?.userId ?? 'unknown'}`);
       return { redirect: redirectUrl, statusCode: 302 };
     } catch (err) {
-      if (err.name === 'InvalidStateError') return { statusCode: 400, body: { error: err.message } };
-      this.logger?.error?.(`[AuthController] completeAuth error: ${err.message}`);
-      return { statusCode: 500, body: { error: 'Authentication failed' } };
+      if (err?.name === 'InvalidStateError') return failure(400, err.message);
+      this.logger?.error?.(`[AuthController] completeAuth error: ${err?.message ?? err}`);
+      return failure(500, 'Authentication failed');
     }
   }
 }

@@ -11,7 +11,13 @@
  *
  * On failure: returns 401 JSON with a typed error body.
  */
-import { JwtSession, InvalidTokenError, IdleExpiredError, HardExpiredError } from '@alt-javascript/jsmdma-auth-core';
+import { JwtSession, IdleExpiredError, HardExpiredError } from '@alt-javascript/jsmdma-auth-core';
+
+const UNAUTHORIZED_CODE = 'unauthorized';
+
+function unauthorized(c, error, extras = {}) {
+  return c.json({ error, code: UNAUTHORIZED_CODE, ...extras }, 401);
+}
 
 /**
  * Create a JWT auth middleware for Hono.
@@ -26,7 +32,7 @@ export function authMiddleware(jwtSecret, logger) {
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       logger?.debug?.('[authMiddleware] missing Authorization header');
-      return c.json({ error: 'Unauthorized' }, 401);
+      return unauthorized(c, 'Unauthorized');
     }
 
     const token = authHeader.slice(7); // strip 'Bearer '
@@ -37,15 +43,15 @@ export function authMiddleware(jwtSecret, logger) {
     } catch (err) {
       if (err instanceof IdleExpiredError) {
         logger?.info?.('[authMiddleware] idle TTL exceeded');
-        return c.json({ error: 'Session expired', reason: 'idle' }, 401);
+        return unauthorized(c, 'Session expired', { reason: 'idle' });
       }
       if (err instanceof HardExpiredError) {
         logger?.info?.('[authMiddleware] hard TTL exceeded');
-        return c.json({ error: 'Session expired', reason: 'hard' }, 401);
+        return unauthorized(c, 'Session expired', { reason: 'hard' });
       }
-      // InvalidTokenError or any other error
-      logger?.debug?.('[authMiddleware] invalid token:', err.message);
-      return c.json({ error: 'Unauthorized' }, 401);
+      // Any verifier failure should map to the same deterministic unauthorized contract.
+      logger?.debug?.('[authMiddleware] invalid token:', err?.message ?? err);
+      return unauthorized(c, 'Unauthorized');
     }
 
     // Attach user to context

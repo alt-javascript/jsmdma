@@ -179,9 +179,53 @@ describe('AppSyncController (CDI integration)', () => {
         assert.equal(res.status, 500);
         const body = await res.json();
         assert.equal(body.error, 'Sync adapter is misconfigured');
+        assert.equal(body.code, 'internal_error');
       } finally {
         await miswiredCtx.stop?.();
       }
+    });
+  });
+
+  describe('AppSyncController.sync — deterministic 5xx contract', () => {
+    it('returns typed non-leaky 500 when appSyncService throws', async () => {
+      const controller = new AppSyncController();
+      controller.appSyncService = {
+        async sync() {
+          throw new Error('super-secret-db-timeout');
+        },
+      };
+
+      const response = await controller.sync({
+        body: {},
+        params: {},
+        headers: {},
+        honoCtx: { get: () => ({ sub: 'user-1' }) },
+      });
+
+      assert.equal(response.statusCode, 500);
+      assert.equal(response.body.error, 'Sync failed');
+      assert.equal(response.body.code, 'internal_error');
+      assert.notInclude(response.body.error, 'super-secret-db-timeout');
+    });
+
+    it('returns typed 500 when appSyncService returns malformed shape', async () => {
+      const controller = new AppSyncController();
+      controller.appSyncService = {
+        async sync() {
+          return { nope: true };
+        },
+      };
+
+      const response = await controller.sync({
+        body: {},
+        params: {},
+        headers: {},
+        honoCtx: { get: () => ({ sub: 'user-1' }) },
+      });
+
+      assert.equal(response.statusCode, 500);
+      assert.equal(response.body.error, 'Malformed sync response');
+      assert.equal(response.body.code, 'internal_error');
     });
   });
 
@@ -210,7 +254,7 @@ describe('AppSyncController (CDI integration)', () => {
   // ── application allowlist ─────────────────────────────────────────────────────
 
   describe('POST /:application/sync — allowlist', () => {
-    it('returns 404 for an unknown application', async () => {
+    it('returns typed 404 for an unknown application', async () => {
       const token = await makeToken();
       const res   = await syncPost(app, 'unknown-app', {
         collection:  'items',
@@ -220,6 +264,7 @@ describe('AppSyncController (CDI integration)', () => {
       assert.equal(res.status, 404);
       const body = await res.json();
       assert.include(body.error, 'unknown-app');
+      assert.equal(body.code, 'not_found');
     });
 
     it('accepts a known application (todo)', async () => {
@@ -385,6 +430,7 @@ describe('AppSyncController (CDI integration)', () => {
       assert.equal(res.status, 400);
       const body = await res.json();
       assert.equal(body.error, 'Schema validation failed');
+      assert.equal(body.code, 'bad_request');
       assert.isArray(body.details);
       assert.isNotEmpty(body.details);
       const fields = body.details.map((d) => d.field);
@@ -499,7 +545,7 @@ describe('AppSyncController (CDI integration)', () => {
       });
     }
 
-    it('non-member presenting x-org-id receives 403', async () => {
+    it('non-member presenting x-org-id receives typed 403', async () => {
       await seedUser('alice');
       await seedUser('bob');
       const aliceToken = await makeToken('alice');
@@ -512,6 +558,9 @@ describe('AppSyncController (CDI integration)', () => {
       }, bobToken, orgId);
 
       assert.equal(res.status, 403);
+      const body = await res.json();
+      assert.equal(body.error, `Not a member of organisation: ${orgId}`);
+      assert.equal(body.code, 'forbidden');
     });
 
     it('member with x-org-id receives 200', async () => {

@@ -31,6 +31,35 @@ function normalizeSchemaError(error) {
   return { field, message };
 }
 
+const ERROR_CODE_BY_STATUS = Object.freeze({
+  400: 'bad_request',
+  401: 'unauthorized',
+  403: 'forbidden',
+  404: 'not_found',
+  409: 'conflict',
+  500: 'internal_error',
+});
+
+function errorCodeForStatus(statusCode) {
+  if (ERROR_CODE_BY_STATUS[statusCode]) {
+    return ERROR_CODE_BY_STATUS[statusCode];
+  }
+  if (statusCode >= 500) return 'internal_error';
+  if (statusCode >= 400) return 'request_error';
+  return 'unknown_error';
+}
+
+function failure(statusCode, error, extras = {}) {
+  return {
+    statusCode,
+    body: {
+      error,
+      code: errorCodeForStatus(statusCode),
+      ...extras,
+    },
+  };
+}
+
 export default class AppSyncService {
   constructor() {
     this.syncService = null;             // CDI autowired
@@ -51,14 +80,14 @@ export default class AppSyncService {
     // ── Auth guard ──────────────────────────────────────────────────────────
     const userPayload = honoCtx?.get?.('user') ?? null;
     if (!userPayload || !userPayload.sub) {
-      return { statusCode: 401, body: { error: 'Authentication required' } };
+      return failure(401, 'Authentication required');
     }
     const userId = userPayload.sub;
 
     // ── Application allowlist ──────────────────────────────────────────────
     const application = params?.application;
     if (!application) {
-      return { statusCode: 400, body: { error: 'Missing application in path' } };
+      return failure(400, 'Missing application in path');
     }
 
     let isAllowed = false;
@@ -73,12 +102,12 @@ export default class AppSyncService {
 
     if (!isAllowed) {
       this.logger?.debug?.(`[AppSyncService] unknown application: ${application}`);
-      return { statusCode: 404, body: { error: `Unknown application: ${application}` } };
+      return failure(404, `Unknown application: ${application}`);
     }
 
     // ── Request body validation ─────────────────────────────────────────────
     if (!body || typeof body !== 'object' || Array.isArray(body)) {
-      return { statusCode: 400, body: { error: 'Request body is required' } };
+      return failure(400, 'Request body is required');
     }
 
     const collection = body.collection;
@@ -86,13 +115,13 @@ export default class AppSyncService {
     const changes = body.changes ?? [];
 
     if (!collection || typeof collection !== 'string') {
-      return { statusCode: 400, body: { error: 'Missing required field: collection' } };
+      return failure(400, 'Missing required field: collection');
     }
     if (!clientClock || typeof clientClock !== 'string') {
-      return { statusCode: 400, body: { error: 'Missing required field: clientClock' } };
+      return failure(400, 'Missing required field: clientClock');
     }
     if (!Array.isArray(changes)) {
-      return { statusCode: 400, body: { error: 'Invalid field: changes must be an array' } };
+      return failure(400, 'Invalid field: changes must be an array');
     }
 
     // ── Org-scope resolution ────────────────────────────────────────────────
@@ -102,7 +131,7 @@ export default class AppSyncService {
     if (orgId) {
       if (!this.orgService || typeof this.orgService.isMember !== 'function') {
         this.logger?.error?.('[AppSyncService] x-org-id header present but orgService not wired');
-        return { statusCode: 500, body: { error: 'Org-scoped sync is not configured' } };
+        return failure(500, 'Org-scoped sync is not configured');
       }
 
       let isMember = false;
@@ -112,12 +141,12 @@ export default class AppSyncService {
         this.logger?.error?.(
           `[AppSyncService] orgService.isMember failed orgId=${orgId} userId=${userId}: ${error?.message ?? error}`,
         );
-        return { statusCode: 500, body: { error: 'Failed to verify organisation membership' } };
+        return failure(500, 'Failed to verify organisation membership');
       }
 
       if (isMember !== true) {
         this.logger?.debug?.(`[AppSyncService] org membership denied orgId=${orgId} userId=${userId}`);
-        return { statusCode: 403, body: { error: `Not a member of organisation: ${orgId}` } };
+        return failure(403, `Not a member of organisation: ${orgId}`);
       }
 
       storageCollection = `org:${orgId}:${application}:${collection}`;
@@ -161,10 +190,7 @@ export default class AppSyncService {
         this.logger?.warn?.(
           `[AppSyncService] schema validation failed app=${application} collection=${collection} userId=${userId} errors=${JSON.stringify(validationErrors)}`,
         );
-        return {
-          statusCode: 400,
-          body: { error: 'Schema validation failed', details: validationErrors },
-        };
+        return failure(400, 'Schema validation failed', { details: validationErrors });
       }
     }
 
@@ -176,7 +202,7 @@ export default class AppSyncService {
         : await this.syncService.sync(collection, clientClock, changes, userId, application);
     } catch (error) {
       this.logger?.error?.(`[AppSyncService] syncService.sync failed: ${error?.message ?? error}`);
-      return { statusCode: 500, body: { error: 'Sync failed' } };
+      return failure(500, 'Sync failed');
     }
 
     const validSyncShape = (
@@ -189,14 +215,14 @@ export default class AppSyncService {
 
     if (!validSyncShape) {
       this.logger?.error?.('[AppSyncService] syncService.sync returned malformed response');
-      return { statusCode: 500, body: { error: 'Malformed sync response' } };
+      return failure(500, 'Malformed sync response');
     }
 
     // ── Document ownership index side-effects ───────────────────────────────
     if (this.documentIndexRepository != null && changes.length > 0) {
       if (typeof this.documentIndexRepository.upsertOwnership !== 'function') {
         this.logger?.error?.('[AppSyncService] documentIndexRepository missing upsertOwnership');
-        return { statusCode: 500, body: { error: 'Document index repository is misconfigured' } };
+        return failure(500, 'Document index repository is misconfigured');
       }
 
       for (const change of changes) {
@@ -209,7 +235,7 @@ export default class AppSyncService {
           this.logger?.error?.(
             `[AppSyncService] docIndex upsert failed userId=${userId} app=${application} key=${change?.key}: ${error?.message ?? error}`,
           );
-          return { statusCode: 500, body: { error: 'Document ownership index update failed' } };
+          return failure(500, 'Document ownership index update failed');
         }
       }
     }

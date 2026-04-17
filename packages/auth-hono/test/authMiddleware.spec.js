@@ -54,12 +54,13 @@ describe('authMiddleware', () => {
     assert.equal(body.sub, 'user-uuid');
   });
 
-  it('returns 401 when Authorization header is missing', async () => {
+  it('returns typed 401 when Authorization header is missing', async () => {
     const app = buildApp();
     const res = await app.request('/protected/resource');
     assert.equal(res.status, 401);
     const body = await res.json();
     assert.equal(body.error, 'Unauthorized');
+    assert.equal(body.code, 'unauthorized');
   });
 
   it('returns 401 when Authorization header is not Bearer', async () => {
@@ -107,6 +108,7 @@ describe('authMiddleware', () => {
     assert.equal(res.status, 401);
     const body = await res.json();
     assert.equal(body.error, 'Session expired');
+    assert.equal(body.code, 'unauthorized');
     assert.equal(body.reason, 'hard');
   });
 

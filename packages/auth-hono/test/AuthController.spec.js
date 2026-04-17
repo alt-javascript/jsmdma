@@ -101,9 +101,12 @@ describe('AuthController (CDI integration)', () => {
   // ── GET /auth/me ─────────────────────────────────────────────────────────────
 
   describe('GET /auth/me', () => {
-    it('returns 401 without token', async () => {
+    it('returns typed 401 without token', async () => {
       const res = await ctx.app.request('/auth/me');
       assert.equal(res.status, 401);
+      const body = await res.json();
+      assert.equal(body.error, 'Unauthorized');
+      assert.equal(body.code, 'unauthorized');
     });
 
     it('returns user identity with valid token', async () => {
@@ -131,11 +134,12 @@ describe('AuthController (CDI integration)', () => {
       assert.include(body.authorizationURL, 'mock.provider');
     });
 
-    it('returns 400 for unknown provider', async () => {
+    it('returns typed 400 for unknown provider', async () => {
       const res = await ctx.app.request('/auth/unknown-provider');
       assert.equal(res.status, 400);
       const body = await res.json();
       assert.include(body.error, 'Unknown provider');
+      assert.equal(body.code, 'bad_request');
     });
   });
 
@@ -168,18 +172,101 @@ describe('AuthController (CDI integration)', () => {
       assert.deepEqual(me.providers, ['mock']);
     });
 
-    it('returns 400 when state is missing', async () => {
+    it('returns typed 400 when state is missing', async () => {
       const res = await ctx.app.request('/auth/mock/callback?code=code');
       assert.equal(res.status, 400);
+      const body = await res.json();
+      assert.equal(body.error, 'Missing required query params: code, state');
+      assert.equal(body.code, 'bad_request');
     });
 
-    it('returns 400 on unknown state (CSRF/replay)', async () => {
+    it('returns typed 400 on unknown state (CSRF/replay)', async () => {
       const res = await ctx.app.request(
         '/auth/mock/callback?code=code&state=unknown-state',
       );
       assert.equal(res.status, 400);
       const body = await res.json();
       assert.include(body.error.toLowerCase(), 'state');
+      assert.equal(body.code, 'bad_request');
+    });
+
+    it('returns typed non-leaky 500 when provider callback throws', async () => {
+      const beginRes = await ctx.app.request('/auth/mock');
+      const beginBody = await beginRes.json();
+
+      ctx.appCtx.get('authController').providers = {
+        mock: {
+          createAuthorizationURL(state) {
+            return new URL(`https://mock.provider/auth?state=${state}`);
+          },
+          async validateCallback() {
+            throw new Error('provider-secret-details');
+          },
+        },
+      };
+
+      const res = await ctx.app.request(
+        `/auth/mock/callback?code=mock-code&state=${beginBody.state}`,
+      );
+
+      assert.equal(res.status, 500);
+      const body = await res.json();
+      assert.equal(body.error, 'Authentication failed');
+      assert.equal(body.code, 'internal_error');
+      assert.notInclude(body.error, 'provider-secret-details');
+    });
+  });
+
+  // ── POST /auth/link/:provider ───────────────────────────────────────────────
+
+  describe('POST /auth/link/:provider', () => {
+    it('returns typed non-leaky 500 when provider callback throws', async () => {
+      const token = await makeToken('link-user', ['mock']);
+      ctx.appCtx.get('authController').providers = {
+        mock: {
+          createAuthorizationURL(state) {
+            return new URL(`https://mock.provider/auth?state=${state}`);
+          },
+          async validateCallback() {
+            throw new Error('link-provider-secret');
+          },
+        },
+      };
+
+      const res = await ctx.app.request('/auth/link/mock?code=abc&state=s1&stored_state=s1', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      assert.equal(res.status, 500);
+      const body = await res.json();
+      assert.equal(body.error, 'Provider callback failed');
+      assert.equal(body.code, 'internal_error');
+      assert.notInclude(body.error, 'link-provider-secret');
+    });
+
+    it('returns typed 500 when provider callback payload is malformed', async () => {
+      const token = await makeToken('link-user', ['mock']);
+      ctx.appCtx.get('authController').providers = {
+        mock: {
+          createAuthorizationURL(state) {
+            return new URL(`https://mock.provider/auth?state=${state}`);
+          },
+          async validateCallback() {
+            return { email: 'bad@payload.dev' };
+          },
+        },
+      };
+
+      const res = await ctx.app.request('/auth/link/mock?code=abc&state=s1&stored_state=s1', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      assert.equal(res.status, 500);
+      const body = await res.json();
+      assert.equal(body.error, 'Provider callback failed');
+      assert.equal(body.code, 'internal_error');
     });
   });
 
@@ -197,13 +284,16 @@ describe('AuthController (CDI integration)', () => {
   // ── POST /:application/sync auth gating ─────────────────────────────────────
 
   describe('POST /:application/sync — auth gating', () => {
-    it('returns 401 without token', async () => {
+    it('returns typed 401 without token', async () => {
       const res = await ctx.app.request('/todo/sync', {
         method: 'POST',
         body: JSON.stringify({ collection: 'items', clientClock: '0000000000000-000000-00000000', changes: [] }),
         headers: { 'Content-Type': 'application/json' },
       });
       assert.equal(res.status, 401);
+      const body = await res.json();
+      assert.equal(body.error, 'Unauthorized');
+      assert.equal(body.code, 'unauthorized');
     });
 
     it('returns 200 with valid token and known application', async () => {
@@ -221,7 +311,7 @@ describe('AuthController (CDI integration)', () => {
       assert.property(body, 'serverClock');
     });
 
-    it('returns 404 for unknown application even with valid token', async () => {
+    it('returns typed 404 for unknown application even with valid token', async () => {
       const token = await makeToken('sync-user', ['mock']);
       const res   = await ctx.app.request('/unknown-app/sync', {
         method:  'POST',
@@ -232,7 +322,9 @@ describe('AuthController (CDI integration)', () => {
         },
       });
       assert.equal(res.status, 404);
+      const body = await res.json();
+      assert.include(body.error, 'Unknown application');
+      assert.equal(body.code, 'not_found');
     });
   });
-
 });

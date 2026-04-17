@@ -13,6 +13,35 @@
  *   this.appSyncService — AppSyncService instance
  *   this.logger         — optional logger
  */
+const ERROR_CODE_BY_STATUS = Object.freeze({
+  400: 'bad_request',
+  401: 'unauthorized',
+  403: 'forbidden',
+  404: 'not_found',
+  409: 'conflict',
+  500: 'internal_error',
+});
+
+function errorCodeForStatus(statusCode) {
+  if (ERROR_CODE_BY_STATUS[statusCode]) {
+    return ERROR_CODE_BY_STATUS[statusCode];
+  }
+  if (statusCode >= 500) return 'internal_error';
+  if (statusCode >= 400) return 'request_error';
+  return 'unknown_error';
+}
+
+function failure(statusCode, error, extras = {}) {
+  return {
+    statusCode,
+    body: {
+      error,
+      code: errorCodeForStatus(statusCode),
+      ...extras,
+    },
+  };
+}
+
 export default class AppSyncController {
   static __routes = [
     { method: 'GET',  path: '/health',            handler: 'health' },
@@ -40,7 +69,7 @@ export default class AppSyncController {
 
     if (!this.appSyncService || typeof this.appSyncService.sync !== 'function') {
       this.logger?.error?.('[AppSyncController] appSyncService is not wired');
-      return { statusCode: 500, body: { error: 'Sync adapter is misconfigured' } };
+      return failure(500, 'Sync adapter is misconfigured');
     }
 
     let response;
@@ -48,7 +77,7 @@ export default class AppSyncController {
       response = await this.appSyncService.sync({ body, params, headers, honoCtx });
     } catch (error) {
       this.logger?.error?.(`[AppSyncController] appSyncService.sync threw: ${error?.message ?? error}`);
-      return { statusCode: 500, body: { error: 'Sync failed' } };
+      return failure(500, 'Sync failed');
     }
 
     const validShape = (
@@ -61,7 +90,7 @@ export default class AppSyncController {
 
     if (!validShape) {
       this.logger?.error?.('[AppSyncController] appSyncService.sync returned malformed response');
-      return { statusCode: 500, body: { error: 'Malformed sync response' } };
+      return failure(500, 'Malformed sync response');
     }
 
     return response;

@@ -83,7 +83,10 @@ describe('AppSyncService', () => {
       const result = await service.sync(makeRequest({ user: null }));
 
       assert.equal(result.statusCode, 401);
-      assert.deepEqual(result.body, { error: 'Authentication required' });
+      assert.deepEqual(result.body, {
+        error: 'Authentication required',
+        code: 'unauthorized',
+      });
     });
 
     it('returns 404 for unknown applications', async () => {
@@ -107,6 +110,7 @@ describe('AppSyncService', () => {
 
       assert.equal(result.statusCode, 404);
       assert.equal(result.body.error, 'Unknown application: todo');
+      assert.equal(result.body.code, 'not_found');
     });
 
     it('returns 400 when body is missing/non-object', async () => {
@@ -115,6 +119,7 @@ describe('AppSyncService', () => {
 
       assert.equal(result.statusCode, 400);
       assert.equal(result.body.error, 'Request body is required');
+      assert.equal(result.body.code, 'bad_request');
     });
 
     it('returns 400 when collection is missing', async () => {
@@ -135,6 +140,7 @@ describe('AppSyncService', () => {
 
       assert.equal(result.statusCode, 400);
       assert.equal(result.body.error, 'Missing required field: clientClock');
+      assert.equal(result.body.code, 'bad_request');
     });
 
     it('returns 400 when changes is not an array', async () => {
@@ -192,6 +198,7 @@ describe('AppSyncService', () => {
 
       assert.equal(result.statusCode, 400);
       assert.equal(result.body.error, 'Schema validation failed');
+      assert.equal(result.body.code, 'bad_request');
       assert.equal(result.body.details[0].key, 'task-malformed');
       assert.equal(result.body.details[0].field, '(validator)');
     });
@@ -220,6 +227,7 @@ describe('AppSyncService', () => {
 
       assert.equal(result.statusCode, 403);
       assert.equal(result.body.error, 'Not a member of organisation: org-1');
+      assert.equal(result.body.code, 'forbidden');
       assert.isEmpty(syncCalls, 'syncService must not be called when membership fails');
     });
   });
@@ -285,7 +293,7 @@ describe('AppSyncService', () => {
   });
 
   describe('500-safe failure behavior', () => {
-    it('returns 500 when syncService throws and skips docIndex writes', async () => {
+    it('returns typed non-leaky 500 when syncService throws and skips docIndex writes', async () => {
       const { service, upsertCalls } = makeService({
         syncService: {
           async sync() {
@@ -304,10 +312,12 @@ describe('AppSyncService', () => {
 
       assert.equal(result.statusCode, 500);
       assert.equal(result.body.error, 'Sync failed');
+      assert.equal(result.body.code, 'internal_error');
+      assert.notInclude(result.body.error, 'db timeout');
       assert.isEmpty(upsertCalls, 'docIndex writes must not run when sync fails');
     });
 
-    it('returns 500 when syncService returns malformed response shape', async () => {
+    it('returns typed 500 when syncService returns malformed response shape', async () => {
       const { service } = makeService({
         syncService: {
           async sync() {
@@ -320,9 +330,10 @@ describe('AppSyncService', () => {
 
       assert.equal(result.statusCode, 500);
       assert.equal(result.body.error, 'Malformed sync response');
+      assert.equal(result.body.code, 'internal_error');
     });
 
-    it('returns 500 when docIndex upsert fails and aborts remaining writes', async () => {
+    it('returns typed 500 when docIndex upsert fails and aborts remaining writes', async () => {
       const upsertKeys = [];
       const { service } = makeService({
         documentIndexRepository: {
@@ -347,7 +358,9 @@ describe('AppSyncService', () => {
 
       assert.equal(result.statusCode, 500);
       assert.equal(result.body.error, 'Document ownership index update failed');
+      assert.equal(result.body.code, 'internal_error');
       assert.deepEqual(upsertKeys, ['doc-1', 'doc-2'], 'upsert loop should stop at first failure');
     });
   });
 });
+
