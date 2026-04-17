@@ -2,7 +2,7 @@
 import { expect } from 'chai';
 import SyncClientAdapter from '../SyncClientAdapter.js';
 import { SyncDocumentStore } from '../SyncDocumentStore.js';
-import { HLC } from '@alt-javascript/jsmdma-core';
+import { HLC } from 'packages/jsmdma-core';
 
 // Mock localStorage for Node.js
 const storage = {};

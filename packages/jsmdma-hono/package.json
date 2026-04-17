@@ -1,0 +1,55 @@
+{
+  "name": "@alt-javascript/jsmdma-hono",
+  "version": "1.0.0",
+  "description": "Hono HTTP adapter for jsmdma — CDI-managed sync endpoint",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "scripts": {
+    "test": "mocha --recursive test/**/*.spec.js"
+  },
+  "keywords": [
+    "jsmdma",
+    "alt-javascript",
+    "hono",
+    "sync",
+    "offline-first"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "homepage": "https://github.com/alt-javascript/jsmdma/tree/main/packages/jsmdma-hono#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alt-javascript/jsmdma",
+    "directory": "packages/hono"
+  },
+  "dependencies": {
+    "@alt-javascript/jsmdma-server": "*",
+    "@alt-javascript/jsmdma-auth-hono": "*",
+    "@alt-javascript/boot-hono": "3.0.7",
+    "@alt-javascript/boot-jsnosqlc": "3.0.7",
+    "@alt-javascript/jsnosqlc-core": "^1.0.1"
+  },
+  "devDependencies": {
+    "@alt-javascript/boot": "3.0.7",
+    "@alt-javascript/cdi": "3.0.7",
+    "@alt-javascript/config": "3.0.7",
+    "@alt-javascript/jsnosqlc-memory": "^1.0.1",
+    "@alt-javascript/jsmdma-auth-core": "*",
+    "@alt-javascript/jsmdma-auth-server": "*",
+    "chai": "^4.3.7",
+    "mocha": "^11.7.5"
+  },
+  "license": "MIT",
+  "author": "Craig Parravicini",
+  "contributors": [
+    "Claude (Anthropic)"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}

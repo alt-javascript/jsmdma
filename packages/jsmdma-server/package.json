@@ -1,0 +1,48 @@
+{
+  "name": "@alt-javascript/jsmdma-server",
+  "version": "1.0.0",
+  "description": "Sync service and repository for jsmdma — CDI-managed, framework-agnostic",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "scripts": {
+    "test": "mocha --recursive test/**/*.spec.js"
+  },
+  "keywords": [
+    "jsmdma",
+    "alt-javascript",
+    "sync",
+    "nosql",
+    "offline-first"
+  ],
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "homepage": "https://github.com/alt-javascript/jsmdma/tree/main/packages/jsmdma-server#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alt-javascript/jsmdma",
+    "directory": "packages/server"
+  },
+  "dependencies": {
+    "@alt-javascript/jsmdma-core": "*",
+    "@alt-javascript/jsnosqlc-core": "^1.0.1",
+    "ajv": "^8.18.0"
+  },
+  "devDependencies": {
+    "@alt-javascript/jsnosqlc-memory": "^1.0.1",
+    "chai": "^4.3.7",
+    "mocha": "^11.7.5"
+  },
+  "license": "MIT",
+  "author": "Craig Parravicini",
+  "contributors": [
+    "Claude (Anthropic)"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}

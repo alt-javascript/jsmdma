@@ -17,8 +17,8 @@
  */
 
 import '@alt-javascript/jsnosqlc-memory';
-import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
-import { HLC } from '@alt-javascript/jsmdma-core';
+import { JwtSession } from 'packages/jsmdma-auth-core';
+import { HLC } from 'packages/jsmdma-core';
 import {
   FULL_STACK_JWT_SECRET as JWT_SECRET,
   buildFullStackStarterApp as buildApp,

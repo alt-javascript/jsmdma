@@ -82,124 +82,133 @@ Create `packages/auth-hono/test/authHonoStarter.spec.js`:
  * - /auth/:provider returns beginAuth JSON with authorizationURL
  * - authController.providers can be set post-startup
  */
-import { assert } from 'chai';
+import {assert} from 'chai';
 import '@alt-javascript/jsnosqlc-memory';
-import { Context, ApplicationContext } from '@alt-javascript/cdi';
-import { EphemeralConfig } from '@alt-javascript/config';
-import { honoStarter } from '@alt-javascript/boot-hono';
-import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
+import {Context, ApplicationContext} from '@alt-javascript/cdi';
+import {EphemeralConfig} from '@alt-javascript/config';
+import {honoStarter} from '@alt-javascript/boot-hono';
+import {jsnosqlcAutoConfiguration} from '@alt-javascript/boot-jsnosqlc';
 import {
-  SyncRepository, SyncService, ApplicationRegistry, SchemaValidator,
+    SyncRepository, SyncService, ApplicationRegistry, SchemaValidator,
 } from '@alt-javascript/jsmdma-server';
-import { AppSyncController } from '@alt-javascript/jsmdma-hono';
-import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
-import { authHonoStarter } from '../authHonoStarter.js';
+import {AppSyncController} from 'packages/jsmdma-hono';
+import {JwtSession} from 'packages/jsmdma-auth-core';
+import {authHonoStarter} from '../authHonoStarter.js';
 
 const JWT_SECRET = 'authHonoStarter-test-secret-32!!';
 
 class MockProvider {
-  constructor(uid = 'mock-uid', email = 'mock@test.com') {
-    this._uid = uid; this._email = email;
-  }
-  createAuthorizationURL(state) {
-    return new URL(`https://mock.provider/auth?state=${state}`);
-  }
-  async validateCallback() {
-    return { providerUserId: this._uid, email: this._email };
-  }
+    constructor(uid = 'mock-uid', email = 'mock@test.com') {
+        this._uid = uid;
+        this._email = email;
+    }
+
+    createAuthorizationURL(state) {
+        return new URL(`https://mock.provider/auth?state=${state}`);
+    }
+
+    async validateCallback() {
+        return {providerUserId: this._uid, email: this._email};
+    }
 }
 
 async function buildContext() {
-  const config = new EphemeralConfig({
-    'boot':         { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
-    'logging':      { level: { ROOT: 'error' } },
-    'server':       { port: 0 },
-    'auth':         { jwt: { secret: JWT_SECRET } },
-    'applications': { 'test-app': {} },
-    'orgs':         { registerable: false },
-  });
+    const config = new EphemeralConfig({
+        'boot': {'banner-mode': 'off', nosql: {url: 'jsnosqlc:memory:'}},
+        'logging': {level: {ROOT: 'error'}},
+        'server': {port: 0},
+        'auth': {jwt: {secret: JWT_SECRET}},
+        'applications': {'test-app': {}},
+        'orgs': {registerable: false},
+    });
 
-  const context = new Context([
-    ...honoStarter(),
-    ...jsnosqlcAutoConfiguration(),
-    { Reference: SyncRepository,    name: 'syncRepository',    scope: 'singleton' },
-    { Reference: SyncService,       name: 'syncService',       scope: 'singleton' },
-    { Reference: ApplicationRegistry, name: 'applicationRegistry', scope: 'singleton',
-      properties: [{ name: 'applications', path: 'applications' }] },
-    { Reference: SchemaValidator, name: 'schemaValidator', scope: 'singleton',
-      properties: [{ name: 'applications', path: 'applications' }] },
-    ...authHonoStarter(),
-    { Reference: AppSyncController, name: 'appSyncController', scope: 'singleton' },
-  ]);
+    const context = new Context([
+        ...honoStarter(),
+        ...jsnosqlcAutoConfiguration(),
+        {Reference: SyncRepository, name: 'syncRepository', scope: 'singleton'},
+        {Reference: SyncService, name: 'syncService', scope: 'singleton'},
+        {
+            Reference: ApplicationRegistry, name: 'applicationRegistry', scope: 'singleton',
+            properties: [{name: 'applications', path: 'applications'}]
+        },
+        {
+            Reference: SchemaValidator, name: 'schemaValidator', scope: 'singleton',
+            properties: [{name: 'applications', path: 'applications'}]
+        },
+        ...authHonoStarter(),
+        {Reference: AppSyncController, name: 'appSyncController', scope: 'singleton'},
+    ]);
 
-  const appCtx = new ApplicationContext({ contexts: [context], config });
-  await appCtx.start({ run: false });
-  await appCtx.get('nosqlClient').ready();
-  appCtx.get('authController').providers = { mock: new MockProvider() };
-  return appCtx;
+    const appCtx = new ApplicationContext({contexts: [context], config});
+    await appCtx.start({run: false});
+    await appCtx.get('nosqlClient').ready();
+    appCtx.get('authController').providers = {mock: new MockProvider()};
+    return appCtx;
 }
 
 describe('authHonoStarter()', () => {
-  let appCtx;
-  before(async () => { appCtx = await buildContext(); });
-
-  it('GET /auth/me returns 401 without token', async () => {
-    const app = appCtx.get('honoApp');
-    const res = await app.request('http://localhost/auth/me');
-    assert.equal(res.status, 401);
-  });
-
-  it('POST /test-app/sync returns 401 without token', async () => {
-    const app = appCtx.get('honoApp');
-    const res = await app.request('http://localhost/test-app/sync', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ collection: 'items', clientClock: '0', changes: [] }),
+    let appCtx;
+    before(async () => {
+        appCtx = await buildContext();
     });
-    assert.equal(res.status, 401);
-  });
 
-  it('GET /auth/mock returns beginAuth JSON', async () => {
-    const app = appCtx.get('honoApp');
-    const res = await app.request('http://localhost/auth/mock');
-    assert.equal(res.status, 200);
-    const body = await res.json();
-    assert.property(body, 'authorizationURL');
-    assert.property(body, 'state');
-    assert.property(body, 'codeVerifier');
-    assert.include(body.authorizationURL, 'mock.provider');
-  });
-
-  it('GET /auth/unknown returns 400 for unknown provider', async () => {
-    const app = appCtx.get('honoApp');
-    const res = await app.request('http://localhost/auth/unknown-provider');
-    assert.equal(res.status, 400);
-  });
-
-  it('GET /auth/me returns user when given valid JWT', async () => {
-    const app = appCtx.get('honoApp');
-    const token = await JwtSession.sign(
-      { sub: 'test-uuid', providers: ['mock'], email: 'test@example.com' },
-      JWT_SECRET,
-    );
-    const res = await app.request('http://localhost/auth/me', {
-      headers: { Authorization: `Bearer ${token}` },
+    it('GET /auth/me returns 401 without token', async () => {
+        const app = appCtx.get('honoApp');
+        const res = await app.request('http://localhost/auth/me');
+        assert.equal(res.status, 401);
     });
-    assert.equal(res.status, 200);
-    const body = await res.json();
-    assert.equal(body.userId, 'test-uuid');
-    assert.deepEqual(body.providers, ['mock']);
-  });
 
-  it('authHonoStarter() does not register duplicate names when called twice', async () => {
-    // The function must return fresh registration objects each call (no shared state)
-    const reg1 = authHonoStarter();
-    const reg2 = authHonoStarter();
-    assert.deepEqual(
-      reg1.map((r) => r.name),
-      reg2.map((r) => r.name),
-    );
-  });
+    it('POST /test-app/sync returns 401 without token', async () => {
+        const app = appCtx.get('honoApp');
+        const res = await app.request('http://localhost/test-app/sync', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({collection: 'items', clientClock: '0', changes: []}),
+        });
+        assert.equal(res.status, 401);
+    });
+
+    it('GET /auth/mock returns beginAuth JSON', async () => {
+        const app = appCtx.get('honoApp');
+        const res = await app.request('http://localhost/auth/mock');
+        assert.equal(res.status, 200);
+        const body = await res.json();
+        assert.property(body, 'authorizationURL');
+        assert.property(body, 'state');
+        assert.property(body, 'codeVerifier');
+        assert.include(body.authorizationURL, 'mock.provider');
+    });
+
+    it('GET /auth/unknown returns 400 for unknown provider', async () => {
+        const app = appCtx.get('honoApp');
+        const res = await app.request('http://localhost/auth/unknown-provider');
+        assert.equal(res.status, 400);
+    });
+
+    it('GET /auth/me returns user when given valid JWT', async () => {
+        const app = appCtx.get('honoApp');
+        const token = await JwtSession.sign(
+            {sub: 'test-uuid', providers: ['mock'], email: 'test@example.com'},
+            JWT_SECRET,
+        );
+        const res = await app.request('http://localhost/auth/me', {
+            headers: {Authorization: `Bearer ${token}`},
+        });
+        assert.equal(res.status, 200);
+        const body = await res.json();
+        assert.equal(body.userId, 'test-uuid');
+        assert.deepEqual(body.providers, ['mock']);
+    });
+
+    it('authHonoStarter() does not register duplicate names when called twice', async () => {
+        // The function must return fresh registration objects each call (no shared state)
+        const reg1 = authHonoStarter();
+        const reg2 = authHonoStarter();
+        assert.deepEqual(
+            reg1.map((r) => r.name),
+            reg2.map((r) => r.name),
+        );
+    });
 });
 ```
 
@@ -245,45 +254,45 @@ Create `packages/auth-hono/authHonoStarter.js`:
  * AppSyncController and AuthController so Hono's app.use() is registered before
  * route handlers.
  */
-import { UserRepository, AuthService, OrgRepository, OrgService }
-  from '@alt-javascript/jsmdma-auth-server';
+import {UserRepository, AuthService, OrgRepository, OrgService}
+    from 'packages/jsmdma-auth-server';
 import AuthMiddlewareRegistrar from './AuthMiddlewareRegistrar.js';
-import AuthController          from './AuthController.js';
-import OrgController           from './OrgController.js';
+import AuthController from './AuthController.js';
+import OrgController from './OrgController.js';
 
 export function authHonoStarter() {
-  return [
-    // Repositories — no CDI dependencies, only jsnosqlc client injected
-    { Reference: UserRepository, name: 'userRepository', scope: 'singleton' },
-    { Reference: OrgRepository,  name: 'orgRepository',  scope: 'singleton' },
+    return [
+        // Repositories — no CDI dependencies, only jsnosqlc client injected
+        {Reference: UserRepository, name: 'userRepository', scope: 'singleton'},
+        {Reference: OrgRepository, name: 'orgRepository', scope: 'singleton'},
 
-    // Services — autowired: userRepository, orgRepository, jwtSecret
-    {
-      Reference: AuthService,
-      name:      'authService',
-      scope:     'singleton',
-      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }],
-    },
-    { Reference: OrgService, name: 'orgService', scope: 'singleton' },
+        // Services — autowired: userRepository, orgRepository, jwtSecret
+        {
+            Reference: AuthService,
+            name: 'authService',
+            scope: 'singleton',
+            properties: [{name: 'jwtSecret', path: 'auth.jwt.secret'}],
+        },
+        {Reference: OrgService, name: 'orgService', scope: 'singleton'},
 
-    // Middleware registrar — MUST come before AppSyncController in Context array
-    // so app.use('/:application/sync', mw) fires before the route handler
-    {
-      Reference: AuthMiddlewareRegistrar,
-      name:      'authMiddlewareRegistrar',
-      scope:     'singleton',
-      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }],
-    },
+        // Middleware registrar — MUST come before AppSyncController in Context array
+        // so app.use('/:application/sync', mw) fires before the route handler
+        {
+            Reference: AuthMiddlewareRegistrar,
+            name: 'authMiddlewareRegistrar',
+            scope: 'singleton',
+            properties: [{name: 'jwtSecret', path: 'auth.jwt.secret'}],
+        },
 
-    // Controllers — route handlers registered after middleware
-    { Reference: AuthController, name: 'authController', scope: 'singleton' },
-    {
-      Reference: OrgController,
-      name:      'orgController',
-      scope:     'singleton',
-      properties: [{ name: 'registerable', path: 'orgs.registerable' }],
-    },
-  ];
+        // Controllers — route handlers registered after middleware
+        {Reference: AuthController, name: 'authController', scope: 'singleton'},
+        {
+            Reference: OrgController,
+            name: 'orgController',
+            scope: 'singleton',
+            properties: [{name: 'registerable', path: 'orgs.registerable'}],
+        },
+    ];
 }
 ```
 
@@ -382,44 +391,44 @@ Overwrite `packages/example-auth/run-local.js`:
  */
 
 import '@alt-javascript/jsnosqlc-memory';
-import { Context, ApplicationContext } from '@alt-javascript/cdi';
-import { EphemeralConfig } from '@alt-javascript/config';
-import { honoStarter } from '@alt-javascript/boot-hono';
-import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
+import {Context, ApplicationContext} from '@alt-javascript/cdi';
+import {EphemeralConfig} from '@alt-javascript/config';
+import {honoStarter} from '@alt-javascript/boot-hono';
+import {jsnosqlcAutoConfiguration} from '@alt-javascript/boot-jsnosqlc';
 import {
-  SyncRepository,
-  SyncService,
-  ApplicationRegistry,
-  SchemaValidator,
+    SyncRepository,
+    SyncService,
+    ApplicationRegistry,
+    SchemaValidator,
 } from '@alt-javascript/jsmdma-server';
-import { AppSyncController } from '@alt-javascript/jsmdma-hono';
-import { authHonoStarter } from '@alt-javascript/jsmdma-auth-hono';
+import {AppSyncController} from 'packages/jsmdma-hono';
+import {authHonoStarter} from 'packages/jsmdma-auth-hono';
 import GoogleProvider from '@alt-javascript/jsmdma-auth-core/providers/google.js';
 import CorsMiddlewareRegistrar from './CorsMiddlewareRegistrar.js';
 
 // ── validate env ──────────────────────────────────────────────────────────────
 
-const GOOGLE_CLIENT_ID     = process.env.GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-const JWT_SECRET           = process.env.JWT_SECRET;
+const JWT_SECRET = process.env.JWT_SECRET;
 
 const missing = [
-  !GOOGLE_CLIENT_ID     && 'GOOGLE_CLIENT_ID',
-  !GOOGLE_CLIENT_SECRET && 'GOOGLE_CLIENT_SECRET',
-  !JWT_SECRET           && 'JWT_SECRET',
+    !GOOGLE_CLIENT_ID && 'GOOGLE_CLIENT_ID',
+    !GOOGLE_CLIENT_SECRET && 'GOOGLE_CLIENT_SECRET',
+    !JWT_SECRET && 'JWT_SECRET',
 ].filter(Boolean);
 
 if (missing.length) {
-  console.error('\nError: Missing required environment variables:', missing.join(', '));
-  console.error('\nUsage:');
-  console.error('  GOOGLE_CLIENT_ID=<id> GOOGLE_CLIENT_SECRET=<secret> JWT_SECRET=<secret32> \\');
-  console.error('    node packages/example-auth/run-local.js\n');
-  process.exit(1);
+    console.error('\nError: Missing required environment variables:', missing.join(', '));
+    console.error('\nUsage:');
+    console.error('  GOOGLE_CLIENT_ID=<id> GOOGLE_CLIENT_SECRET=<secret> JWT_SECRET=<secret32> \\');
+    console.error('    node packages/example-auth/run-local.js\n');
+    process.exit(1);
 }
 
 if (JWT_SECRET.length < 32) {
-  console.error('\nError: JWT_SECRET must be at least 32 characters.\n');
-  process.exit(1);
+    console.error('\nError: JWT_SECRET must be at least 32 characters.\n');
+    process.exit(1);
 }
 
 // ── config ────────────────────────────────────────────────────────────────────
@@ -427,80 +436,84 @@ if (JWT_SECRET.length < 32) {
 const REDIRECT_URI = 'http://127.0.0.1:8081/auth/google/callback';
 
 const APPLICATIONS_CONFIG = {
-  'year-planner': {
-    description: 'Year planner application',
-    collections: {
-      planners: {
-        schemaPath: './packages/server/schemas/planner.json',
-      },
-      preferences: {
-        schemaPath: './packages/server/schemas/preferences.json',
-      },
+    'year-planner': {
+        description: 'Year planner application',
+        collections: {
+            planners: {
+                schemaPath: './packages/server/schemas/planner.json',
+            },
+            preferences: {
+                schemaPath: './packages/server/schemas/preferences.json',
+            },
+        },
     },
-  },
 };
 
 // ── CDI context ───────────────────────────────────────────────────────────────
 
 const config = new EphemeralConfig({
-  'boot':         { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
-  'logging':      { level: { ROOT: 'info' } },
-  'server':       { port: 8081, host: '127.0.0.1' },
-  'auth':         { jwt: { secret: JWT_SECRET } },
-  'applications': APPLICATIONS_CONFIG,
-  'orgs':         { registerable: false },
+    'boot': {'banner-mode': 'off', nosql: {url: 'jsnosqlc:memory:'}},
+    'logging': {level: {ROOT: 'info'}},
+    'server': {port: 8081, host: '127.0.0.1'},
+    'auth': {jwt: {secret: JWT_SECRET}},
+    'applications': APPLICATIONS_CONFIG,
+    'orgs': {registerable: false},
 });
 
 const context = new Context([
-  ...honoStarter(),
-  ...jsnosqlcAutoConfiguration(),
-  { Reference: SyncRepository,    name: 'syncRepository',    scope: 'singleton' },
-  { Reference: SyncService,       name: 'syncService',       scope: 'singleton' },
-  { Reference: ApplicationRegistry, name: 'applicationRegistry', scope: 'singleton',
-    properties: [{ name: 'applications', path: 'applications' }] },
-  { Reference: SchemaValidator, name: 'schemaValidator', scope: 'singleton',
-    properties: [{ name: 'applications', path: 'applications' }] },
-  // CORS must be first
-  { Reference: CorsMiddlewareRegistrar, name: 'corsMiddlewareRegistrar', scope: 'singleton' },
-  // Full auth stack: AuthMiddlewareRegistrar MUST come before AppSyncController
-  ...authHonoStarter(),
-  { Reference: AppSyncController, name: 'appSyncController', scope: 'singleton' },
+    ...honoStarter(),
+    ...jsnosqlcAutoConfiguration(),
+    {Reference: SyncRepository, name: 'syncRepository', scope: 'singleton'},
+    {Reference: SyncService, name: 'syncService', scope: 'singleton'},
+    {
+        Reference: ApplicationRegistry, name: 'applicationRegistry', scope: 'singleton',
+        properties: [{name: 'applications', path: 'applications'}]
+    },
+    {
+        Reference: SchemaValidator, name: 'schemaValidator', scope: 'singleton',
+        properties: [{name: 'applications', path: 'applications'}]
+    },
+    // CORS must be first
+    {Reference: CorsMiddlewareRegistrar, name: 'corsMiddlewareRegistrar', scope: 'singleton'},
+    // Full auth stack: AuthMiddlewareRegistrar MUST come before AppSyncController
+    ...authHonoStarter(),
+    {Reference: AppSyncController, name: 'appSyncController', scope: 'singleton'},
 ]);
 
-const appCtx = new ApplicationContext({ contexts: [context], config });
+const appCtx = new ApplicationContext({contexts: [context], config});
 
 // ── start ─────────────────────────────────────────────────────────────────────
 
 async function main() {
-  await appCtx.start();
-  await appCtx.get('nosqlClient').ready();
+    await appCtx.start();
+    await appCtx.get('nosqlClient').ready();
 
-  // Set OAuth providers post-startup (providers are runtime instances, not CDI beans)
-  appCtx.get('authController').providers = {
-    google: new GoogleProvider({
-      clientId:     GOOGLE_CLIENT_ID,
-      clientSecret: GOOGLE_CLIENT_SECRET,
-      redirectUri:  REDIRECT_URI,
-    }),
-  };
+    // Set OAuth providers post-startup (providers are runtime instances, not CDI beans)
+    appCtx.get('authController').providers = {
+        google: new GoogleProvider({
+            clientId: GOOGLE_CLIENT_ID,
+            clientSecret: GOOGLE_CLIENT_SECRET,
+            redirectUri: REDIRECT_URI,
+        }),
+    };
 
-  console.log('\n  jsmdma local POC server running on http://127.0.0.1:8081');
-  console.log('  Routes:');
-  console.log('    GET  /health');
-  console.log('    GET  /auth/google              → begin OAuth (returns authorizationURL JSON)');
-  console.log('    GET  /auth/google/callback     → complete OAuth (returns { user, token })');
-  console.log('    GET  /auth/me                  → current user (requires JWT)');
-  console.log('    POST /year-planner/sync        → HLC sync (requires JWT)');
-  console.log('  Auth: jsmdma JWT (issued after Google OAuth redirect flow)');
-  console.log('  Storage: in-memory (data lost on restart)');
-  console.log('\n  Start the SPA: npx http-server site/ -p 8080 (in year-planner repo)');
-  console.log('  Sign in: redirect to http://127.0.0.1:8081/auth/google\n');
+    console.log('\n  jsmdma local POC server running on http://127.0.0.1:8081');
+    console.log('  Routes:');
+    console.log('    GET  /health');
+    console.log('    GET  /auth/google              → begin OAuth (returns authorizationURL JSON)');
+    console.log('    GET  /auth/google/callback     → complete OAuth (returns { user, token })');
+    console.log('    GET  /auth/me                  → current user (requires JWT)');
+    console.log('    POST /year-planner/sync        → HLC sync (requires JWT)');
+    console.log('  Auth: jsmdma JWT (issued after Google OAuth redirect flow)');
+    console.log('  Storage: in-memory (data lost on restart)');
+    console.log('\n  Start the SPA: npx http-server site/ -p 8080 (in year-planner repo)');
+    console.log('  Sign in: redirect to http://127.0.0.1:8081/auth/google\n');
 }
 
 main().catch((err) => {
-  console.error('\nFailed to start:', err.message);
-  console.error(err.stack);
-  process.exit(1);
+    console.error('\nFailed to start:', err.message);
+    console.error(err.stack);
+    process.exit(1);
 });
 ```
 
@@ -552,15 +565,17 @@ cat /Users/craig/src/github/alt-javascript/jsmdma/packages/example-auth/run.js
 In `packages/example-auth/run.js`, find the CDI context definition (the `Context([...])` array). Replace the manual registrations of `UserRepository`, `AuthService`, `AuthMiddlewareRegistrar`, `AuthController` with `...authHonoStarter()`.
 
 The import block at the top should add:
+
 ```js
-import { authHonoStarter } from '@alt-javascript/jsmdma-auth-hono';
+import {authHonoStarter} from 'packages/jsmdma-auth-hono';
 ```
 
 And remove the individual imports:
+
 ```js
 // DELETE these lines:
-import { AuthController, AuthMiddlewareRegistrar } from '@alt-javascript/jsmdma-auth-hono';
-import { UserRepository, AuthService } from '@alt-javascript/jsmdma-auth-server';
+import {AuthController, AuthMiddlewareRegistrar} from 'packages/jsmdma-auth-hono';
+import {UserRepository, AuthService} from 'packages/jsmdma-auth-server';
 ```
 
 The Context array changes from:

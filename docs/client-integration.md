@@ -13,7 +13,7 @@ npm install @alt-javascript/jsmdma-core
 ```
 
 ```js
-import { SyncClient } from '@alt-javascript/jsmdma-core';
+import {SyncClient} from 'packages/jsmdma-core';
 ```
 
 `SyncClient` has no runtime dependencies beyond the other modules in `packages/core` (HLC, diff, merge). It does not use `localStorage`, `IndexedDB`, `fs`, or any other storage API — persistence is your responsibility (see [Persisting State](#persisting-state)).
@@ -256,21 +256,21 @@ The conflict is **already resolved** in the stored document — the `conflicts` 
 The following example shows a complete offline-first sync loop wiring all the steps together.
 
 ```js
-import { SyncClient } from '@alt-javascript/jsmdma-core';
+import {SyncClient} from 'packages/jsmdma-core';
 
 const AUTH_TOKEN = 'eyJhbGciOiJIUzI1NiJ9...';  // from your auth flow
-const API_BASE   = 'https://api.example.com';
+const API_BASE = 'https://api.example.com';
 
 // ─── 1. Restore or create the client ────────────────────────────────────────
 
 let client =
-  SyncClient.fromSnapshot(JSON.parse(localStorage.getItem('syncState') ?? 'null'))
-  ?? new SyncClient(crypto.randomUUID());
+    SyncClient.fromSnapshot(JSON.parse(localStorage.getItem('syncState') ?? 'null'))
+    ?? new SyncClient(crypto.randomUUID());
 
 // ─── 2. Record a local edit ──────────────────────────────────────────────────
 
 // The user saves a document in your UI:
-client.edit('todos/1', { title: 'Buy milk', done: false });
+client.edit('todos/1', {title: 'Buy milk', done: false});
 
 // Persist the new edit state immediately (crash safety)
 localStorage.setItem('syncState', JSON.stringify(client.getSnapshot()));
@@ -278,62 +278,62 @@ localStorage.setItem('syncState', JSON.stringify(client.getSnapshot()));
 // ─── 3. Sync with the server ─────────────────────────────────────────────────
 
 async function sync(collection) {
-  const requestBody = {
-    collection,
-    clientClock: client.baseClock,   // last serverClock received
-    changes:     client.getChanges(),
-  };
+    const requestBody = {
+        collection,
+        clientClock: client.baseClock,   // last serverClock received
+        changes: client.getChanges(),
+    };
 
-  const response = await fetch(`${API_BASE}/todo/sync`, {
-    method:  'POST',
-    headers: {
-      'Content-Type':  'application/json',
-      'Authorization': `Bearer ${AUTH_TOKEN}`,
-    },
-    body: JSON.stringify(requestBody),
-  });
+    const response = await fetch(`${API_BASE}/todo/sync`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${AUTH_TOKEN}`,
+        },
+        body: JSON.stringify(requestBody),
+    });
 
-  if (!response.ok) {
-    throw new Error(`Sync failed: ${response.status}`);
-  }
-
-  const serverResponse = await response.json();
-
-  // Apply the response — merges server changes, advances baseClock
-  const { serverChanges, conflicts } = client.sync(serverResponse);
-
-  // ─── 4. Persist updated state ──────────────────────────────────────────────
-  localStorage.setItem('syncState', JSON.stringify(client.getSnapshot()));
-
-  // ─── 5. Apply server documents to local store ─────────────────────────────
-  for (const serverDoc of serverChanges) {
-    const key       = serverDoc._key;
-    const appFields = Object.fromEntries(
-      Object.entries(serverDoc).filter(([k]) => !k.startsWith('_'))
-    );
-    myLocalStore.set(key, appFields);  // your own storage abstraction
-  }
-
-  // ─── 6. Handle conflicts ───────────────────────────────────────────────────
-  for (const conflict of conflicts) {
-    if (conflict.winner === 'auto-merged') {
-      console.info(`Auto-merged ${conflict.key}.${conflict.field}`);
-    } else {
-      const losing = conflict.winner === 'local' ? conflict.remoteValue : conflict.localValue;
-      console.warn(`Conflict on ${conflict.key}.${conflict.field}: ${conflict.winner} won. Lost: ${losing}`);
+    if (!response.ok) {
+        throw new Error(`Sync failed: ${response.status}`);
     }
-  }
 
-  return { serverChanges, conflicts };
+    const serverResponse = await response.json();
+
+    // Apply the response — merges server changes, advances baseClock
+    const {serverChanges, conflicts} = client.sync(serverResponse);
+
+    // ─── 4. Persist updated state ──────────────────────────────────────────────
+    localStorage.setItem('syncState', JSON.stringify(client.getSnapshot()));
+
+    // ─── 5. Apply server documents to local store ─────────────────────────────
+    for (const serverDoc of serverChanges) {
+        const key = serverDoc._key;
+        const appFields = Object.fromEntries(
+            Object.entries(serverDoc).filter(([k]) => !k.startsWith('_'))
+        );
+        myLocalStore.set(key, appFields);  // your own storage abstraction
+    }
+
+    // ─── 6. Handle conflicts ───────────────────────────────────────────────────
+    for (const conflict of conflicts) {
+        if (conflict.winner === 'auto-merged') {
+            console.info(`Auto-merged ${conflict.key}.${conflict.field}`);
+        } else {
+            const losing = conflict.winner === 'local' ? conflict.remoteValue : conflict.localValue;
+            console.warn(`Conflict on ${conflict.key}.${conflict.field}: ${conflict.winner} won. Lost: ${losing}`);
+        }
+    }
+
+    return {serverChanges, conflicts};
 }
 
 // ─── 7. Optional: check pruning on startup ────────────────────────────────
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 if (client.shouldPrune(THIRTY_DAYS_MS)) {
-  client.prune();
-  localStorage.setItem('syncState', JSON.stringify(client.getSnapshot()));
-  // Next sync will automatically use clientClock: HLC.zero() for a full re-download
+    client.prune();
+    localStorage.setItem('syncState', JSON.stringify(client.getSnapshot()));
+    // Next sync will automatically use clientClock: HLC.zero() for a full re-download
 }
 
 // ─── 8. Kick off a sync ────────────────────────────────────────────────────

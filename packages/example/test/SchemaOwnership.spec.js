@@ -3,7 +3,7 @@ import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import SchemaValidator from '../../server/SchemaValidator.js';
+import SchemaValidator from '../../jsmdma-server/SchemaValidator.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const EXAMPLE_SCHEMAS_DIR = resolve(__dirname, '../schemas');

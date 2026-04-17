@@ -65,54 +65,54 @@ then controllers), and exposes hook stages for app-specific extensions.
 
 ```js
 import '@alt-javascript/jsnosqlc-memory';
-import { Context, ApplicationContext } from '@alt-javascript/cdi';
-import { EphemeralConfig } from '@alt-javascript/config';
+import {Context, ApplicationContext} from '@alt-javascript/cdi';
+import {EphemeralConfig} from '@alt-javascript/config';
 import {
-  jsmdmaHonoStarter,
-  DocIndexController,
-  SearchController,
-  ExportController,
-  DeletionController,
-} from '@alt-javascript/jsmdma-hono';
+    jsmdmaHonoStarter,
+    DocIndexController,
+    SearchController,
+    ExportController,
+    DeletionController,
+} from 'packages/jsmdma-hono';
 import {
-  DocumentIndexRepository,
-  SearchService,
-  ExportService,
-  DeletionService,
+    DocumentIndexRepository,
+    SearchService,
+    ExportService,
+    DeletionService,
 } from '@alt-javascript/jsmdma-server';
 
 const config = new EphemeralConfig({
-  boot:         { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
-  logging:      { level: { ROOT: 'error' } },
-  server:       { port: 3000 },
-  auth:         { jwt: { secret: process.env.JWT_SECRET } },
-  applications: APPLICATIONS_CONFIG,    // see Section 4
-  orgs:         { registerable: true },
+    boot: {'banner-mode': 'off', nosql: {url: 'jsnosqlc:memory:'}},
+    logging: {level: {ROOT: 'error'}},
+    server: {port: 3000},
+    auth: {jwt: {secret: process.env.JWT_SECRET}},
+    applications: APPLICATIONS_CONFIG,    // see Section 4
+    orgs: {registerable: true},
 });
 
 const context = new Context([
-  ...jsmdmaHonoStarter({
-    hooks: {
-      // Add app services before AppSyncController is registered
-      beforeAppSync: [
-        { Reference: DocumentIndexRepository, name: 'documentIndexRepository', scope: 'singleton' },
-        { Reference: SearchService,          name: 'searchService',          scope: 'singleton' },
-        { Reference: ExportService,          name: 'exportService',          scope: 'singleton' },
-        { Reference: DeletionService,        name: 'deletionService',        scope: 'singleton' },
-      ],
-      // Add controllers after AppSyncController + auth middleware are in place
-      afterAppSync: [
-        { Reference: DocIndexController, name: 'docIndexController', scope: 'singleton' },
-        { Reference: SearchController,   name: 'searchController',   scope: 'singleton' },
-        { Reference: ExportController,   name: 'exportController',   scope: 'singleton' },
-        { Reference: DeletionController, name: 'deletionController', scope: 'singleton' },
-      ],
-    },
-  }),
+    ...jsmdmaHonoStarter({
+        hooks: {
+            // Add app services before AppSyncController is registered
+            beforeAppSync: [
+                {Reference: DocumentIndexRepository, name: 'documentIndexRepository', scope: 'singleton'},
+                {Reference: SearchService, name: 'searchService', scope: 'singleton'},
+                {Reference: ExportService, name: 'exportService', scope: 'singleton'},
+                {Reference: DeletionService, name: 'deletionService', scope: 'singleton'},
+            ],
+            // Add controllers after AppSyncController + auth middleware are in place
+            afterAppSync: [
+                {Reference: DocIndexController, name: 'docIndexController', scope: 'singleton'},
+                {Reference: SearchController, name: 'searchController', scope: 'singleton'},
+                {Reference: ExportController, name: 'exportController', scope: 'singleton'},
+                {Reference: DeletionController, name: 'deletionController', scope: 'singleton'},
+            ],
+        },
+    }),
 ]);
 
-const appCtx = new ApplicationContext({ contexts: [context], config });
-await appCtx.start({ run: false });
+const appCtx = new ApplicationContext({contexts: [context], config});
+await appCtx.start({run: false});
 await appCtx.get('nosqlClient').ready();
 ```
 
@@ -215,24 +215,24 @@ Use `JwtSession.sign` to create a token without going through an OAuth
 provider. This is the pattern used throughout `packages/example/run-apps.js`.
 
 ```js
-import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
+import {JwtSession} from 'packages/jsmdma-auth-core';
 
 const JWT_SECRET = 'your-dev-secret-at-least-32-chars!!';
 
 // Mint a token for a user
 const token = await JwtSession.sign(
-  { sub: 'alice-uuid', email: 'alice@example.com', providers: ['demo'] },
-  JWT_SECRET,
+    {sub: 'alice-uuid', email: 'alice@example.com', providers: ['demo']},
+    JWT_SECRET,
 );
 
 // Use it in HTTP requests
 const res = await fetch('/year-planner/sync', {
-  method: 'POST',
-  headers: {
-    'Authorization': `Bearer ${token}`,
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify({ collection: 'planners', clientClock: HLC.zero(), changes: [] }),
+    method: 'POST',
+    headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({collection: 'planners', clientClock: HLC.zero(), changes: []}),
 });
 ```
 
@@ -286,46 +286,46 @@ const { serverChanges, serverClock, conflicts } = await res.json();
 ### Subsequent syncs (bidirectional)
 
 ```js
-import { HLC } from '@alt-javascript/jsmdma-core';
+import {HLC} from 'packages/jsmdma-core';
 
 // Advance the local clock before writing a new document
 const newClock = HLC.tick(lastServerClock, Date.now());
 
 const res = await fetch('/year-planner/sync', {
-  method: 'POST',
-  headers: {
-    Authorization: `Bearer ${token}`,
-    'Content-Type': 'application/json',
-  },
-  body: JSON.stringify({
-    collection:  'planners',
-    clientClock: lastServerClock,   // clock received from the previous sync response
-    changes: [
-      {
-        key:       'planner-2026',
-        doc: {
-          meta: { name: 'My 2026 Planner', year: 2026 },
-          days: {
-            '2026-01-01': { tp: '08:00', notes: 'New Year' },
-            '2026-06-15': { tp: '09:00', notes: 'Mid-year review' },
-          },
-        },
-        fieldRevs: {
-          // flat dot-path map — one HLC string per leaf field
-          'meta.name':               newClock,
-          'meta.year':               newClock,
-          'days.2026-01-01.tp':      newClock,
-          'days.2026-01-01.notes':   newClock,
-          'days.2026-06-15.tp':      newClock,
-          'days.2026-06-15.notes':   newClock,
-        },
-        baseClock: HLC.zero(),  // clock of the version this change is based on
-      },
-    ],
-  }),
+    method: 'POST',
+    headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+        collection: 'planners',
+        clientClock: lastServerClock,   // clock received from the previous sync response
+        changes: [
+            {
+                key: 'planner-2026',
+                doc: {
+                    meta: {name: 'My 2026 Planner', year: 2026},
+                    days: {
+                        '2026-01-01': {tp: '08:00', notes: 'New Year'},
+                        '2026-06-15': {tp: '09:00', notes: 'Mid-year review'},
+                    },
+                },
+                fieldRevs: {
+                    // flat dot-path map — one HLC string per leaf field
+                    'meta.name': newClock,
+                    'meta.year': newClock,
+                    'days.2026-01-01.tp': newClock,
+                    'days.2026-01-01.notes': newClock,
+                    'days.2026-06-15.tp': newClock,
+                    'days.2026-06-15.notes': newClock,
+                },
+                baseClock: HLC.zero(),  // clock of the version this change is based on
+            },
+        ],
+    }),
 });
 
-const { serverChanges, serverClock, conflicts } = await res.json();
+const {serverChanges, serverClock, conflicts} = await res.json();
 // Store serverClock as the new lastServerClock for the next request
 ```
 
@@ -443,7 +443,7 @@ The core package is isomorphic — it runs in browsers, Node, and edge runtimes
 with no Node-specific dependencies.
 
 ```js
-import { HLC } from '@alt-javascript/jsmdma-core';
+import {HLC} from 'packages/jsmdma-core';
 
 // Zero clock — "I have seen nothing yet"
 // All real clocks compare greater than this value

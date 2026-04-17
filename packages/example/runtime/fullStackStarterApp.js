@@ -7,15 +7,15 @@ import {
   SearchController,
   ExportController,
   DeletionController,
-} from '@alt-javascript/jsmdma-hono';
+} from 'packages/jsmdma-hono';
 import {
   SearchService,
   DocumentIndexRepository,
   ExportService,
   DeletionService,
 } from '@alt-javascript/jsmdma-server';
-import { AuthMiddlewareRegistrar, OrgController } from '@alt-javascript/jsmdma-auth-hono';
-import { UserRepository, OrgRepository, OrgService } from '@alt-javascript/jsmdma-auth-server';
+import { AuthMiddlewareRegistrar, OrgController } from 'packages/jsmdma-auth-hono';
+import { UserRepository, OrgRepository, OrgService } from 'packages/jsmdma-auth-server';
 import { fileURLToPath } from 'node:url';
 
 export const FULL_STACK_JWT_SECRET = 'run-apps-jwt-secret-at-least-32chars!';

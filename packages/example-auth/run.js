@@ -32,9 +32,9 @@ import {
   ApplicationRegistry,
   SchemaValidator,
 } from '@alt-javascript/jsmdma-server';
-import { AppSyncController } from '@alt-javascript/jsmdma-hono';
-import { authHonoStarter } from '@alt-javascript/jsmdma-auth-hono';
-import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
+import { AppSyncController } from 'packages/jsmdma-hono';
+import { authHonoStarter } from 'packages/jsmdma-auth-hono';
+import { JwtSession } from 'packages/jsmdma-auth-core';
 import { SignJWT } from 'jose';
 
 // ── constants ─────────────────────────────────────────────────────────────────

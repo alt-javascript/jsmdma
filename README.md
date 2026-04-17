@@ -22,12 +22,12 @@ Users can belong to **organisations** — app-agnostic named groups. An org memb
 
 | Package | npm | Description |
 |---|---|---|
-| [`packages/core`](packages/core/) | [`@alt-javascript/jsmdma-core`](https://www.npmjs.com/package/@alt-javascript/jsmdma-core) | Isomorphic: HLC clock, field diff, merge engine, SyncClient (no Node deps) |
-| [`packages/server`](packages/server/) | [`@alt-javascript/jsmdma-server`](https://www.npmjs.com/package/@alt-javascript/jsmdma-server) | SyncRepository, SyncService, ApplicationRegistry, SchemaValidator |
-| [`packages/hono`](packages/hono/) | [`@alt-javascript/jsmdma-hono`](https://www.npmjs.com/package/@alt-javascript/jsmdma-hono) | AppSyncController — Hono route wiring |
-| [`packages/auth-core`](packages/auth-core/) | [`@alt-javascript/jsmdma-auth-core`](https://www.npmjs.com/package/@alt-javascript/jsmdma-auth-core) | JWT session helpers, OAuth provider errors |
-| [`packages/auth-server`](packages/auth-server/) | [`@alt-javascript/jsmdma-auth-server`](https://www.npmjs.com/package/@alt-javascript/jsmdma-auth-server) | UserRepository, AuthService, OrgRepository, OrgService |
-| [`packages/auth-hono`](packages/auth-hono/) | [`@alt-javascript/jsmdma-auth-hono`](https://www.npmjs.com/package/@alt-javascript/jsmdma-auth-hono) | AuthMiddlewareRegistrar, AuthController, OrgController |
+| [`packages/core`](packages/jsmdma-core/) | [`@alt-javascript/jsmdma-core`](https://www.npmjs.com/package/@alt-javascript/jsmdma-core) | Isomorphic: HLC clock, field diff, merge engine, SyncClient (no Node deps) |
+| [`packages/server`](packages/jsmdma-server/) | [`@alt-javascript/jsmdma-server`](https://www.npmjs.com/package/@alt-javascript/jsmdma-server) | SyncRepository, SyncService, ApplicationRegistry, SchemaValidator |
+| [`packages/hono`](packages/jsmdma-hono/) | [`@alt-javascript/jsmdma-hono`](https://www.npmjs.com/package/@alt-javascript/jsmdma-hono) | AppSyncController — Hono route wiring |
+| [`packages/auth-core`](packages/jsmdma-auth-core/) | [`@alt-javascript/jsmdma-auth-core`](https://www.npmjs.com/package/@alt-javascript/jsmdma-auth-core) | JWT session helpers, OAuth provider errors |
+| [`packages/auth-server`](packages/jsmdma-auth-server/) | [`@alt-javascript/jsmdma-auth-server`](https://www.npmjs.com/package/@alt-javascript/jsmdma-auth-server) | UserRepository, AuthService, OrgRepository, OrgService |
+| [`packages/auth-hono`](packages/jsmdma-auth-hono/) | [`@alt-javascript/jsmdma-auth-hono`](https://www.npmjs.com/package/@alt-javascript/jsmdma-auth-hono) | AuthMiddlewareRegistrar, AuthController, OrgController |
 | [`packages/example`](packages/example/) | — (private) | Runnable sync demos: `run.js`, `run-apps.js` |
 | [`packages/example-auth`](packages/example-auth/) | — (private) | Runnable auth lifecycle demo |
 
@@ -212,37 +212,37 @@ The `applications` config block declares which application paths are accepted by
 **Canonical starter (recommended):**
 
 ```js
-import { Context } from '@alt-javascript/cdi';
-import { jsmdmaHonoStarter } from '@alt-javascript/jsmdma-hono';
+import {Context} from '@alt-javascript/cdi';
+import {jsmdmaHonoStarter} from 'packages/jsmdma-hono';
 
 const context = new Context([
-  ...jsmdmaHonoStarter(),
+    ...jsmdmaHonoStarter(),
 ]);
 ```
 
 **Advanced options (constrained, opt-in):**
 
 ```js
-import { Context } from '@alt-javascript/cdi';
-import { jsmdmaHonoStarter } from '@alt-javascript/jsmdma-hono';
+import {Context} from '@alt-javascript/cdi';
+import {jsmdmaHonoStarter} from 'packages/jsmdma-hono';
 import AuditMiddlewareRegistrar from './AuditMiddlewareRegistrar.js';
 
 const context = new Context([
-  ...jsmdmaHonoStarter({
-    // feature toggles are dependency-validated at startup
-    features: {
-      sync: false,
-      appSyncController: false,
-    },
-    // hooks are stage-scoped; invalid stages/payloads fail fast
-    hooks: {
-      beforeAuth: [{
-        Reference: AuditMiddlewareRegistrar,
-        name: 'auditMiddlewareRegistrar',
-        scope: 'singleton',
-      }],
-    },
-  }),
+    ...jsmdmaHonoStarter({
+        // feature toggles are dependency-validated at startup
+        features: {
+            sync: false,
+            appSyncController: false,
+        },
+        // hooks are stage-scoped; invalid stages/payloads fail fast
+        hooks: {
+            beforeAuth: [{
+                Reference: AuditMiddlewareRegistrar,
+                name: 'auditMiddlewareRegistrar',
+                scope: 'singleton',
+            }],
+        },
+    }),
 ]);
 ```
 

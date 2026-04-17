@@ -41,8 +41,8 @@
 import '@alt-javascript/jsnosqlc-memory';
 import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
-import { jsmdmaHonoStarter } from '@alt-javascript/jsmdma-hono';
-import { GoogleProvider, GitHubProvider } from '@alt-javascript/jsmdma-auth-core';
+import { jsmdmaHonoStarter } from 'packages/jsmdma-hono';
+import { GoogleProvider, GitHubProvider } from 'packages/jsmdma-auth-core';
 import { LoggerFactory } from '@alt-javascript/logger';
 import { fileURLToPath } from 'node:url';
 import CorsMiddlewareRegistrar from './CorsMiddlewareRegistrar.js';
