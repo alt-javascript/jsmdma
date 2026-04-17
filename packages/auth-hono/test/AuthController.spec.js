@@ -121,13 +121,13 @@ describe('AuthController (CDI integration)', () => {
   // ── GET /auth/:provider ───────────────────────────────────────────────────────
 
   describe('GET /auth/:provider', () => {
-    it('returns authorizationURL, state, codeVerifier for known provider', async () => {
+    it('returns authorizationURL and state for known provider', async () => {
       const res = await ctx.app.request('/auth/mock');
       assert.equal(res.status, 200);
       const body = await res.json();
       assert.property(body, 'authorizationURL');
       assert.property(body, 'state');
-      assert.property(body, 'codeVerifier');
+      assert.notProperty(body, 'codeVerifier');
       assert.include(body.authorizationURL, 'mock.provider');
     });
 
@@ -142,21 +142,30 @@ describe('AuthController (CDI integration)', () => {
   // ── GET /auth/:provider/callback ─────────────────────────────────────────────
 
   describe('GET /auth/:provider/callback', () => {
-    it('completes auth and returns user + token', async () => {
+    it('completes auth and persists the provider-linked user', async () => {
       // First: get a real state from beginAuth
-      const beginRes  = await ctx.app.request('/auth/mock');
+      const beginRes = await ctx.app.request('/auth/mock');
       const beginBody = await beginRes.json();
-      const { state, codeVerifier } = beginBody;
+      const { state } = beginBody;
 
       const res = await ctx.app.request(
-        `/auth/mock/callback?code=mock-code&state=${state}&stored_state=${state}&code_verifier=${codeVerifier}`,
+        `/auth/mock/callback?code=mock-code&state=${state}`,
       );
-      assert.equal(res.status, 200);
-      const body = await res.json();
-      assert.property(body, 'user');
-      assert.property(body, 'token');
-      assert.match(body.user.userId, /^[0-9a-f-]{36}$/);
-      assert.isString(body.token);
+      assert.equal(res.status, 302);
+      assert.include(['', '""'], await res.text());
+
+      const storedUser = await ctx.appCtx.get('userRepository').findByProvider('mock', 'mock-uid');
+      assert.isOk(storedUser, 'callback should create or resolve provider-linked user');
+      assert.match(storedUser.userId, /^[0-9a-f-]{36}$/);
+
+      const token = await makeToken(storedUser.userId, ['mock']);
+      const meRes = await ctx.app.request('/auth/me', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      assert.equal(meRes.status, 200);
+      const me = await meRes.json();
+      assert.equal(me.userId, storedUser.userId);
+      assert.deepEqual(me.providers, ['mock']);
     });
 
     it('returns 400 when state is missing', async () => {
@@ -164,9 +173,9 @@ describe('AuthController (CDI integration)', () => {
       assert.equal(res.status, 400);
     });
 
-    it('returns 400 on state mismatch (CSRF)', async () => {
+    it('returns 400 on unknown state (CSRF/replay)', async () => {
       const res = await ctx.app.request(
-        '/auth/mock/callback?code=code&state=actual&stored_state=different',
+        '/auth/mock/callback?code=code&state=unknown-state',
       );
       assert.equal(res.status, 400);
       const body = await res.json();

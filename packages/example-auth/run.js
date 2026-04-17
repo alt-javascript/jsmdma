@@ -6,7 +6,7 @@
  *   1. Boot CDI context with mock OAuth providers
  *   2. First login → new UUID issued, JWT returned
  *   3. GET /auth/me → user identity confirmed
- *   4. POST /sync with JWT → authenticated sync succeeds
+ *   4. POST /:application/sync with JWT → authenticated sync succeeds
  *   5. Rolling refresh → X-Auth-Token header emitted for near-expiry token
  *   6. Link a second provider → providers list updated
  *   7. Unlink the first provider → one provider remains
@@ -25,8 +25,14 @@ import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
 import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
-import { SyncRepository, SyncService } from '@alt-javascript/jsmdma-server';
-import { SyncController } from '@alt-javascript/jsmdma-hono';
+import {
+  SyncRepository,
+  SyncService,
+  AppSyncService,
+  ApplicationRegistry,
+  SchemaValidator,
+} from '@alt-javascript/jsmdma-server';
+import { AppSyncController } from '@alt-javascript/jsmdma-hono';
 import { authHonoStarter } from '@alt-javascript/jsmdma-auth-hono';
 import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 import { SignJWT } from 'jose';
@@ -34,6 +40,10 @@ import { SignJWT } from 'jose';
 // ── constants ─────────────────────────────────────────────────────────────────
 
 const JWT_SECRET = 'example-auth-secret-must-be-32-chars!!';
+const APPLICATION_NAME = 'todo';
+const APPLICATIONS_CONFIG = {
+  [APPLICATION_NAME]: {},
+};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -99,20 +109,34 @@ async function craftRefreshableToken(sub, providers, email) {
 
 async function buildContext(providers) {
   const config = new EphemeralConfig({
-    'boot':    { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
-    'logging': { level: { ROOT: 'error' } },
-    'server':  { port: 0 },
-    'auth':    { jwt: { secret: JWT_SECRET } },
-    'orgs':    { registerable: false },
+    'boot':         { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
+    'logging':      { level: { ROOT: 'error' } },
+    'server':       { port: 0 },
+    'auth':         { jwt: { secret: JWT_SECRET } },
+    'applications': APPLICATIONS_CONFIG,
+    'orgs':         { registerable: false },
   });
 
   const context = new Context([
     ...honoStarter(),
     ...jsnosqlcAutoConfiguration(),
     { Reference: SyncRepository, name: 'syncRepository', scope: 'singleton' },
-    { Reference: SyncService,    name: 'syncService',    scope: 'singleton' },
+    { Reference: SyncService, name: 'syncService', scope: 'singleton' },
+    { Reference: AppSyncService, name: 'appSyncService', scope: 'singleton' },
+    {
+      Reference: ApplicationRegistry,
+      name: 'applicationRegistry',
+      scope: 'singleton',
+      properties: [{ name: 'applications', path: 'applications' }],
+    },
+    {
+      Reference: SchemaValidator,
+      name: 'schemaValidator',
+      scope: 'singleton',
+      properties: [{ name: 'applications', path: 'applications' }],
+    },
     ...authHonoStarter(),
-    { Reference: SyncController, name: 'syncController', scope: 'singleton' },
+    { Reference: AppSyncController, name: 'appSyncController', scope: 'singleton' },
   ]);
 
   const appCtx = new ApplicationContext({ contexts: [context], config });
@@ -124,14 +148,58 @@ async function buildContext(providers) {
   return { app: appCtx.get('honoAdapter').app, appCtx };
 }
 
-// ── helper: login via a mock provider ────────────────────────────────────────
+// ── helper: login/link flow for in-process request simulation ───────────────
 
-async function login(app, providerName) {
-  const beginRes  = await app.request(`/auth/${providerName}`);
-  const { state, codeVerifier } = await beginRes.json();
-  const callbackUrl = `/auth/${providerName}/callback?code=mock&state=${state}&stored_state=${state}&code_verifier=${codeVerifier}`;
+function encode(value) {
+  return encodeURIComponent(value ?? '');
+}
+
+async function completeAuthCallback(app, providerName, state) {
+  const callbackUrl = `/auth/${providerName}/callback?code=mock&state=${encode(state)}`;
   const res = await app.request(callbackUrl);
-  return res.json();
+  assert(res.status === 302, `callback should return 302, got ${res.status}`);
+}
+
+async function login(app, repo, providerName, providerUserId) {
+  const beginRes = await app.request(`/auth/${providerName}`);
+  assert(beginRes.status === 200, `begin auth should return 200, got ${beginRes.status}`);
+
+  const { state } = await beginRes.json();
+  await completeAuthCallback(app, providerName, state);
+
+  const userRecord = await repo.findByProvider(providerName, providerUserId);
+  assert(userRecord, `provider login should create/find user for ${providerName}:${providerUserId}`);
+
+  const providers = userRecord.providers.map((p) => p.provider);
+  const token = await JwtSession.sign({
+    sub: userRecord.userId,
+    providers,
+    email: userRecord.email ?? null,
+  }, JWT_SECRET);
+
+  return {
+    token,
+    user: {
+      userId: userRecord.userId,
+      email: userRecord.email ?? null,
+      providers,
+    },
+  };
+}
+
+async function beginLink(app, providerName, token) {
+  const beginRes = await app.request(`/auth/${providerName}?link=true`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert(beginRes.status === 200, `begin link should return 200, got ${beginRes.status}`);
+
+  const { state } = await beginRes.json();
+
+  return {
+    code: 'mock',
+    state,
+    codeVerifier: '',
+  };
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────
@@ -139,10 +207,11 @@ async function login(app, providerName) {
 async function main() {
   banner('jsmdma — Auth Lifecycle Example');
 
-  const { app } = await buildContext({
+  const { app, appCtx } = await buildContext({
     github: new MockProvider('gh-user-1', 'alice@github.com'),
     google: new MockProvider('google-user-1', 'alice@google.com'),
   });
+  const repo = appCtx.get('userRepository');
 
   console.log('\n  ✓ CDI context ready (mock providers: github, google)');
 
@@ -150,15 +219,15 @@ async function main() {
 
   banner('Step 1: First login via GitHub');
 
-  const { user: u1, token: token1 } = await login(app, 'github');
+  const { user: u1, token: token1 } = await login(app, repo, 'github', 'gh-user-1');
 
   assert(u1.userId.length === 36, 'userId should be a UUID');
   assert(u1.providers.length === 1, 'should have 1 provider');
-  assert(u1.providers[0].provider === 'github', 'provider should be github');
+  assert(u1.providers[0] === 'github', 'provider should be github');
 
   print('User UUID:', u1.userId);
   print('Email:', u1.email);
-  print('Providers:', u1.providers.map(p => p.provider));
+  print('Providers:', u1.providers);
   print('JWT (first 40):', token1.slice(0, 40) + '...');
   console.log('\n  ✓ New UUID assigned');
 
@@ -178,19 +247,34 @@ async function main() {
   print('providers:', me.providers);
   console.log('\n  ✓ Identity confirmed');
 
-  // ── Step 3: Authenticated POST /sync ──────────────────────────────────────
+  // ── Step 3: Authenticated POST /:application/sync ─────────────────────────
 
-  banner('Step 3: POST /sync with JWT');
+  banner(`Step 3: POST /${APPLICATION_NAME}/sync with JWT`);
 
-  const syncRes = await app.request('/sync', {
+  const syncRes = await app.request(`/${APPLICATION_NAME}/sync`, {
     method:  'POST',
     body:    JSON.stringify({ collection: 'notes', clientClock: '0000000000000-000000-00000000', changes: [] }),
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token1}` },
   });
-  assert(syncRes.status === 200, `/sync should return 200, got ${syncRes.status}`);
+  assert(syncRes.status === 200, `/${APPLICATION_NAME}/sync should return 200, got ${syncRes.status}`);
   const syncBody = await syncRes.json();
   print('serverClock:', syncBody.serverClock);
-  console.log('\n  ✓ Authenticated sync succeeded');
+
+  const malformedSyncRes = await app.request(`/${APPLICATION_NAME}/sync`, {
+    method: 'POST',
+    body: JSON.stringify({ clientClock: '0000000000000-000000-00000000', changes: [] }),
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token1}` },
+  });
+  assert(malformedSyncRes.status === 400, `malformed /${APPLICATION_NAME}/sync should return 400, got ${malformedSyncRes.status}`);
+
+  const unknownAppSyncRes = await app.request('/unknown-app/sync', {
+    method: 'POST',
+    body: JSON.stringify({ collection: 'notes', clientClock: '0000000000000-000000-00000000', changes: [] }),
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token1}` },
+  });
+  assert(unknownAppSyncRes.status === 404, `unknown app sync should return 404, got ${unknownAppSyncRes.status}`);
+
+  console.log('\n  ✓ Authenticated app-scoped sync succeeded; malformed/unknown-app checks passed');
 
   // ── Step 4: Rolling refresh ────────────────────────────────────────────────
 
@@ -214,13 +298,10 @@ async function main() {
 
   banner('Step 5: Link Google as second provider');
 
-  const beginRes = await app.request('/auth/google', {
-    headers: { Authorization: `Bearer ${token1}` },
-  });
-  const { state, codeVerifier } = await beginRes.json();
+  const { code, state, codeVerifier } = await beginLink(app, 'google', token1);
 
   const linkRes = await app.request(
-    `/auth/link/google?code=mock&state=${state}&stored_state=${state}&code_verifier=${codeVerifier}`,
+    `/auth/link/google?code=${encode(code)}&state=${encode(state)}&stored_state=${encode(state)}&code_verifier=${encode(codeVerifier)}`,
     { method: 'POST', headers: { Authorization: `Bearer ${token1}` } },
   );
   assert(linkRes.status === 200, `link should return 200, got ${linkRes.status}`);
@@ -280,7 +361,8 @@ async function main() {
   banner('Result');
   console.log('\n  ✓ First login → new UUID assigned');
   console.log('  ✓ GET /auth/me → identity confirmed');
-  console.log('  ✓ POST /sync → authenticated request succeeds');
+  console.log(`  ✓ POST /${APPLICATION_NAME}/sync → authenticated request succeeds`);
+  console.log('  ✓ Sync boundary guards → malformed body=400, unknown app=404');
   console.log('  ✓ Rolling refresh → X-Auth-Token emitted, iat_session preserved');
   console.log('  ✓ Provider link → second provider added, UUID unchanged');
   console.log('  ✓ Provider unlink → first provider removed');
