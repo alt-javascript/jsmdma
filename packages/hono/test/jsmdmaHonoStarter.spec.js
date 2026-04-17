@@ -30,6 +30,16 @@ class AfterAppSyncHook {
   routes() {}
 }
 
+class MalformedErrorController {
+  static __routes = [
+    { method: 'GET', path: '/_starter/malformed-error', handler: 'malformedError' },
+  ];
+
+  malformedError() {
+    return { statusCode: 418, body: 'teapot exploded' };
+  }
+}
+
 async function buildContext({ configData = BASE_CONFIG, starterOptions } = {}) {
   const config = new EphemeralConfig(configData);
   const context = new Context([
@@ -63,6 +73,7 @@ describe('jsmdmaHonoStarter()', () => {
       'appSyncService',
       'applicationRegistry',
       'schemaValidator',
+      'frameworkErrorContractMiddleware',
       'authMiddlewareRegistrar',
       'authController',
       'orgController',
@@ -103,6 +114,7 @@ describe('jsmdmaHonoStarter()', () => {
     const syncRepositoryIdx = names.indexOf('syncRepository');
     const appSyncServiceIdx = names.indexOf('appSyncService');
     const beforeAuthIdx = names.indexOf('beforeAuthHook');
+    const frameworkErrorMiddlewareIdx = names.indexOf('frameworkErrorContractMiddleware');
     const authMiddlewareIdx = names.indexOf('authMiddlewareRegistrar');
     const beforeAppSyncIdx = names.indexOf('beforeAppSyncHook');
     const appSyncIdx = names.indexOf('appSyncController');
@@ -112,7 +124,9 @@ describe('jsmdmaHonoStarter()', () => {
     assert.isBelow(beforeSyncIdx, syncRepositoryIdx, 'beforeSync hook should be inserted before sync stack');
 
     assert.isAtLeast(beforeAuthIdx, 0);
-    assert.isBelow(beforeAuthIdx, authMiddlewareIdx, 'beforeAuth hook should be inserted before auth middleware');
+    assert.isAtLeast(frameworkErrorMiddlewareIdx, 0);
+    assert.isBelow(beforeAuthIdx, frameworkErrorMiddlewareIdx, 'beforeAuth hook should be inserted before error middleware');
+    assert.isBelow(frameworkErrorMiddlewareIdx, authMiddlewareIdx, 'error middleware must remain before auth middleware');
 
     assert.isAtLeast(beforeAppSyncIdx, 0);
     assert.isBelow(authMiddlewareIdx, beforeAppSyncIdx, 'auth middleware must remain before beforeAppSync stage');
@@ -186,6 +200,18 @@ describe('jsmdmaHonoStarter()', () => {
     assert.deepEqual(await res.json(), { status: 'ok' });
   });
 
+  it('normalizes unknown routes to typed 404 envelope', async () => {
+    const appCtx = await buildContext();
+    const app = appCtx.get('honoAdapter').app;
+
+    const res = await app.request('/_starter/unknown-route');
+    assert.equal(res.status, 404);
+    assert.deepEqual(await res.json(), {
+      error: 'Not Found',
+      code:  'not_found',
+    });
+  });
+
   it('keeps POST /:application/sync protected (401 without JWT)', async () => {
     const appCtx = await buildContext();
     const app = appCtx.get('honoAdapter').app;
@@ -201,6 +227,10 @@ describe('jsmdmaHonoStarter()', () => {
     });
 
     assert.equal(res.status, 401);
+    assert.deepEqual(await res.json(), {
+      error: 'Unauthorized',
+      code:  'unauthorized',
+    });
   });
 
   it('boots with a supported auth-only feature set (no sync stack)', async () => {
@@ -232,6 +262,10 @@ describe('jsmdmaHonoStarter()', () => {
 
     const authMe = await app.request('/auth/me');
     assert.equal(authMe.status, 401);
+    assert.deepEqual(await authMe.json(), {
+      error: 'Unauthorized',
+      code:  'unauthorized',
+    });
   });
 
   it('boots with maximal supported options (explicit features + all hook stages)', async () => {
@@ -262,6 +296,24 @@ describe('jsmdmaHonoStarter()', () => {
       body:    JSON.stringify({ collection: 'tasks', clientClock: '0', changes: [] }),
     });
     assert.equal(syncWithoutJwt.status, 401);
+  });
+
+  it('coerces malformed non-2xx bodies into deterministic typed envelopes', async () => {
+    const appCtx = await buildContext({
+      starterOptions: {
+        hooks: {
+          afterAppSync: [MalformedErrorController],
+        },
+      },
+    });
+    const app = appCtx.get('honoAdapter').app;
+
+    const res = await app.request('/_starter/malformed-error');
+    assert.equal(res.status, 418);
+    assert.deepEqual(await res.json(), {
+      error: 'teapot exploded',
+      code:  'request_error',
+    });
   });
 
   it('fails fast at startup when auth.jwt.secret is missing', async () => {

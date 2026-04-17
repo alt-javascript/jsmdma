@@ -18,7 +18,7 @@
  *   /account/*          — all account export routes (M008)
  *
  * CDI autowires:
- *   this.jwtSecret — JWT secret string
+ *   this.jwtSecret — JWT secret string (required, >= 32 chars; fail-fast on invalid)
  *   this.logger    — optional logger
  */
 import { authMiddleware } from './authMiddleware.js';
@@ -36,7 +36,10 @@ export default class AuthMiddlewareRegistrar {
    * @param {import('hono').Hono} app
    */
   routes(app) {
-    if (!this.jwtSecret) return;
+    if (typeof this.jwtSecret !== 'string' || this.jwtSecret.length < 32) {
+      throw new Error('[AuthMiddlewareRegistrar] Missing or invalid config at auth.jwt.secret (expected string length >= 32)');
+    }
+
     const mw = authMiddleware(this.jwtSecret, this.logger);
     app.use('/auth/me',           mw);
     app.use('/auth/link/*',       mw);

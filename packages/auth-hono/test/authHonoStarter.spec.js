@@ -22,6 +22,15 @@ import { authHonoStarter } from '../authHonoStarter.js';
 
 const JWT_SECRET = 'authHonoStarter-test-secret-32!!';
 
+const BASE_CONFIG = {
+  'boot':         { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
+  'logging':      { level: { ROOT: 'error' } },
+  'server':       { port: 0 },
+  'auth':         { jwt: { secret: JWT_SECRET } },
+  'applications': { 'test-app': {} },
+  'orgs':         { registerable: false },
+};
+
 class MockProvider {
   constructor(uid = 'mock-uid', email = 'mock@test.com') {
     this._uid = uid; this._email = email;
@@ -34,15 +43,8 @@ class MockProvider {
   }
 }
 
-async function buildContext() {
-  const config = new EphemeralConfig({
-    'boot':         { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
-    'logging':      { level: { ROOT: 'error' } },
-    'server':       { port: 0 },
-    'auth':         { jwt: { secret: JWT_SECRET } },
-    'applications': { 'test-app': {} },
-    'orgs':         { registerable: false },
-  });
+async function buildContext({ configData = BASE_CONFIG } = {}) {
+  const config = new EphemeralConfig(configData);
 
   const context = new Context([
     ...honoStarter(),
@@ -73,18 +75,26 @@ describe('authHonoStarter()', () => {
     app = appCtx.get('honoAdapter').app;
   });
 
-  it('GET /auth/me returns 401 without token', async () => {
+  it('GET /auth/me returns typed 401 envelope without token', async () => {
     const res = await app.request('http://localhost/auth/me');
     assert.equal(res.status, 401);
+    assert.deepEqual(await res.json(), {
+      error: 'Unauthorized',
+      code:  'unauthorized',
+    });
   });
 
-  it('POST /test-app/sync returns 401 without token', async () => {
+  it('POST /test-app/sync returns typed 401 envelope without token', async () => {
     const res = await app.request('http://localhost/test-app/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ collection: 'items', clientClock: '0', changes: [] }),
     });
     assert.equal(res.status, 401);
+    assert.deepEqual(await res.json(), {
+      error: 'Unauthorized',
+      code:  'unauthorized',
+    });
   });
 
   it('GET /auth/mock returns beginAuth JSON', async () => {
@@ -97,9 +107,21 @@ describe('authHonoStarter()', () => {
     assert.include(body.authorizationURL, 'mock.provider');
   });
 
-  it('GET /auth/unknown returns 400 for unknown provider', async () => {
+  it('GET /auth/unknown returns typed 400 for unknown provider', async () => {
     const res = await app.request('http://localhost/auth/unknown-provider');
     assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.include(body.error, 'Unknown provider');
+    assert.equal(body.code, 'bad_request');
+  });
+
+  it('unknown routes return typed 404 envelope', async () => {
+    const res = await app.request('http://localhost/no-such-route');
+    assert.equal(res.status, 404);
+    assert.deepEqual(await res.json(), {
+      error: 'Not Found',
+      code:  'not_found',
+    });
   });
 
   it('GET /auth/me returns user when given valid JWT', async () => {
@@ -116,6 +138,40 @@ describe('authHonoStarter()', () => {
     assert.deepEqual(body.providers, ['mock']);
   });
 
+  it('fails fast at startup when auth.jwt.secret is missing', async () => {
+    const badConfig = {
+      ...BASE_CONFIG,
+      auth: { jwt: {} },
+    };
+
+    let startupError = null;
+    try {
+      await buildContext({ configData: badConfig });
+    } catch (err) {
+      startupError = err;
+    }
+
+    assert.instanceOf(startupError, Error);
+    assert.include(startupError.message, 'auth.jwt.secret');
+  });
+
+  it('fails fast at startup when auth.jwt.secret is too short', async () => {
+    const badConfig = {
+      ...BASE_CONFIG,
+      auth: { jwt: { secret: 'short-secret' } },
+    };
+
+    let startupError = null;
+    try {
+      await buildContext({ configData: badConfig });
+    } catch (err) {
+      startupError = err;
+    }
+
+    assert.instanceOf(startupError, Error);
+    assert.include(startupError.message, 'auth.jwt.secret');
+  });
+
   it('authHonoStarter() does not register duplicate names when called twice', async () => {
     // The function must return fresh registration objects each call (no shared state)
     const reg1 = authHonoStarter();
@@ -123,6 +179,15 @@ describe('authHonoStarter()', () => {
     assert.deepEqual(
       reg1.map((r) => r.name),
       reg2.map((r) => r.name),
+    );
+
+    const names = reg1.map((r) => r.name);
+    assert.include(names, 'frameworkErrorContractMiddleware');
+    assert.include(names, 'authMiddlewareRegistrar');
+    assert.isBelow(
+      names.indexOf('frameworkErrorContractMiddleware'),
+      names.indexOf('authMiddlewareRegistrar'),
+      'error middleware must register before auth middleware',
     );
   });
 });

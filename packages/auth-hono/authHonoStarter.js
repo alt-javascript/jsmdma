@@ -29,6 +29,7 @@
  */
 import { UserRepository, AuthService, OrgRepository, OrgService }
   from '@alt-javascript/jsmdma-auth-server';
+import FrameworkErrorContractMiddleware from './FrameworkErrorContractMiddleware.js';
 import AuthMiddlewareRegistrar from './AuthMiddlewareRegistrar.js';
 import AuthController          from './AuthController.js';
 import OrgController           from './OrgController.js';
@@ -47,6 +48,14 @@ export function authHonoStarter() {
       properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }],
     },
     { Reference: OrgService, name: 'orgService', scope: 'singleton' },
+
+    // Error normalizer — MUST run before route handlers so starter-driven
+    // failures produce one deterministic typed envelope.
+    {
+      Reference: FrameworkErrorContractMiddleware,
+      name:      'frameworkErrorContractMiddleware',
+      scope:     'singleton',
+    },
 
     // Middleware registrar — MUST come before AppSyncController in Context array
     // so app.use('/:application/sync', mw) fires before the route handler
