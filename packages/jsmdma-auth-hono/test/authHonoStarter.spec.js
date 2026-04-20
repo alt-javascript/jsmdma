@@ -1,11 +1,5 @@
 /**
  * authHonoStarter.spec.js — CDI integration tests for authHonoStarter()
- *
- * Verifies the helper wires the full auth stack correctly:
- * - /auth/me returns 401 without token
- * - /:app/sync returns 401 without token
- * - /auth/:provider returns beginAuth JSON with authorizationURL + state (no codeVerifier)
- * - authController.providers can be set post-startup
  */
 import { assert } from 'chai';
 import '@alt-javascript/jsnosqlc-memory';
@@ -34,13 +28,58 @@ const BASE_CONFIG = {
 
 class MockProvider {
   constructor(uid = 'mock-uid', email = 'mock@test.com') {
-    this._uid = uid; this._email = email;
+    this._uid = uid;
+    this._email = email;
   }
+
   createAuthorizationURL(state) {
     return new URL(`https://mock.provider/auth?state=${state}`);
   }
+
   async validateCallback() {
     return { providerUserId: this._uid, email: this._email };
+  }
+}
+
+class InMemoryIdentityLinkStore {
+  constructor() {
+    this.anchorOwners = new Map();
+    this.userLinks = new Map();
+  }
+
+  _anchorKey(provider, providerUserId) {
+    return `${provider}::${providerUserId}`;
+  }
+
+  async getUserByProviderAnchor({ provider, providerUserId }) {
+    return this.anchorOwners.get(this._anchorKey(provider, providerUserId)) ?? null;
+  }
+
+  async link({ userId, provider, providerUserId }) {
+    const key = this._anchorKey(provider, providerUserId);
+    this.anchorOwners.set(key, userId);
+
+    const links = this.userLinks.get(userId) ?? new Map();
+    links.set(provider, providerUserId);
+    this.userLinks.set(userId, links);
+
+    return { outcome: 'linked' };
+  }
+
+  async unlink({ userId, provider }) {
+    const links = this.userLinks.get(userId) ?? new Map();
+    const providerUserId = links.get(provider);
+    if (providerUserId) {
+      this.anchorOwners.delete(this._anchorKey(provider, providerUserId));
+      links.delete(provider);
+      this.userLinks.set(userId, links);
+    }
+    return { outcome: 'unlinked' };
+  }
+
+  async getLinksForUser(userId) {
+    const links = this.userLinks.get(userId) ?? new Map();
+    return [...links.entries()].map(([provider, providerUserId]) => ({ provider, providerUserId }));
   }
 }
 
@@ -50,13 +89,21 @@ async function buildContext({ configData = BASE_CONFIG } = {}) {
   const context = new Context([
     ...honoStarter(),
     ...jsnosqlcAutoConfiguration(),
-    { Reference: SyncRepository,    name: 'syncRepository',    scope: 'singleton' },
-    { Reference: SyncService,       name: 'syncService',       scope: 'singleton' },
-    { Reference: AppSyncService,    name: 'appSyncService',    scope: 'singleton' },
-    { Reference: ApplicationRegistry, name: 'applicationRegistry', scope: 'singleton',
-      properties: [{ name: 'applications', path: 'applications' }] },
-    { Reference: SchemaValidator, name: 'schemaValidator', scope: 'singleton',
-      properties: [{ name: 'applications', path: 'applications' }] },
+    { Reference: SyncRepository, name: 'syncRepository', scope: 'singleton' },
+    { Reference: SyncService, name: 'syncService', scope: 'singleton' },
+    { Reference: AppSyncService, name: 'appSyncService', scope: 'singleton' },
+    {
+      Reference: ApplicationRegistry,
+      name: 'applicationRegistry',
+      scope: 'singleton',
+      properties: [{ name: 'applications', path: 'applications' }],
+    },
+    {
+      Reference: SchemaValidator,
+      name: 'schemaValidator',
+      scope: 'singleton',
+      properties: [{ name: 'applications', path: 'applications' }],
+    },
     ...authHonoStarter(),
     { Reference: AppSyncController, name: 'appSyncController', scope: 'singleton' },
   ]);
@@ -64,28 +111,36 @@ async function buildContext({ configData = BASE_CONFIG } = {}) {
   const appCtx = new ApplicationContext({ contexts: [context], config });
   await appCtx.start({ run: false });
   await appCtx.get('nosqlClient').ready();
+
+  const store = new InMemoryIdentityLinkStore();
   appCtx.get('authController').providers = { mock: new MockProvider() };
+  appCtx.get('authController').oauthIdentityLinkStore = store;
+  appCtx.get('authService').oauthIdentityLinkStore = store;
+
   return appCtx;
 }
 
 describe('authHonoStarter()', () => {
   let appCtx;
   let app;
+
   before(async () => {
     appCtx = await buildContext();
     app = appCtx.get('honoAdapter').app;
   });
 
-  it('GET /auth/me returns typed 401 envelope without token', async () => {
+  it('GET /auth/me returns typed session_required without credentials', async () => {
     const res = await app.request('http://localhost/auth/me');
     assert.equal(res.status, 401);
     assert.deepEqual(await res.json(), {
       error: 'Unauthorized',
-      code:  'unauthorized',
+      code: 'invalid_state',
+      reason: 'session_required',
+      details: {},
     });
   });
 
-  it('POST /test-app/sync returns typed 401 envelope without token', async () => {
+  it('POST /test-app/sync remains bearer middleware-gated', async () => {
     const res = await app.request('http://localhost/test-app/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -108,12 +163,20 @@ describe('authHonoStarter()', () => {
     assert.include(body.authorizationURL, 'mock.provider');
   });
 
-  it('GET /auth/unknown returns typed 400 for unknown provider', async () => {
+  it('GET /auth/login/finalize resolves to lifecycle route (not /auth/:provider shadow)', async () => {
+    const res = await app.request('http://localhost/auth/login/finalize');
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.equal(body.code, 'bad_request');
+    assert.include(body.error, 'Missing required field');
+  });
+
+  it('GET /auth/unknown returns typed unsupported_provider', async () => {
     const res = await app.request('http://localhost/auth/unknown-provider');
     assert.equal(res.status, 400);
     const body = await res.json();
-    assert.include(body.error, 'Unknown provider');
-    assert.equal(body.code, 'bad_request');
+    assert.equal(body.code, 'invalid_state');
+    assert.equal(body.reason, 'unsupported_provider');
   });
 
   it('unknown routes return typed 404 envelope', async () => {
@@ -125,18 +188,34 @@ describe('authHonoStarter()', () => {
     });
   });
 
-  it('GET /auth/me returns user when given valid JWT', async () => {
+  it('GET /auth/me returns user when given valid bearer JWT', async () => {
     const token = await JwtSession.sign(
       { sub: 'test-uuid', providers: ['mock'], email: 'test@example.com' },
       JWT_SECRET,
     );
-    const res = await app.request('http://localhost/auth/me', {  // eslint-disable-line no-shadow
+    const res = await app.request('http://localhost/auth/me', {
       headers: { Authorization: `Bearer ${token}` },
     });
     assert.equal(res.status, 200);
     const body = await res.json();
     assert.equal(body.userId, 'test-uuid');
     assert.deepEqual(body.providers, ['mock']);
+    assert.equal(body.mode, 'bearer');
+  });
+
+  it('GET /auth/me returns user when given valid cookie JWT', async () => {
+    const token = await JwtSession.sign(
+      { sub: 'cookie-uuid', providers: ['mock'], email: 'cookie@example.com' },
+      JWT_SECRET,
+    );
+    const res = await app.request('http://localhost/auth/me', {
+      headers: { Cookie: `auth_session=${encodeURIComponent(token)}` },
+    });
+
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.userId, 'cookie-uuid');
+    assert.equal(body.mode, 'cookie');
   });
 
   it('fails fast at startup when auth.jwt.secret is missing', async () => {
@@ -174,7 +253,6 @@ describe('authHonoStarter()', () => {
   });
 
   it('authHonoStarter() does not register duplicate names when called twice', async () => {
-    // The function must return fresh registration objects each call (no shared state)
     const reg1 = authHonoStarter();
     const reg2 = authHonoStarter();
     assert.deepEqual(

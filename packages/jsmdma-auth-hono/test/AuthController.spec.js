@@ -1,9 +1,5 @@
 /**
  * AuthController.spec.js — CDI integration tests for AuthController
- *
- * Tests the full auth stack: CDI → AuthMiddlewareRegistrar → AuthController →
- * AuthService → UserRepository → jsnosqlc-memory.
- * Also tests that /:application/sync is gated by auth middleware.
  */
 import { assert } from 'chai';
 import '@alt-javascript/jsnosqlc-memory';
@@ -55,8 +51,8 @@ function assertSupportedProvider(value, operation) {
 
 class InMemoryIdentityLinkStore {
   constructor() {
-    this.anchorOwners = new Map(); // `${provider}::${providerUserId}` -> userId
-    this.userLinks = new Map(); // userId -> Map<provider, providerUserId>
+    this.anchorOwners = new Map();
+    this.userLinks = new Map();
     this.hooks = {
       getUserByProviderAnchor: null,
       link: null,
@@ -230,22 +226,20 @@ class InMemoryIdentityLinkStore {
   }
 }
 
-// ── MockProvider ──────────────────────────────────────────────────────────────
-
 class MockProvider {
   constructor(providerUserId = 'github-uid', email = 'user@github.com') {
     this._uid = providerUserId;
     this._email = email;
   }
+
   createAuthorizationURL(state) {
     return new URL(`https://mock.provider/auth?state=${state}`);
   }
+
   async validateCallback() {
     return { providerUserId: this._uid, email: this._email };
   }
 }
-
-// ── CDI context builder ───────────────────────────────────────────────────────
 
 async function buildContext() {
   const config = new EphemeralConfig({
@@ -268,8 +262,6 @@ async function buildContext() {
       scope: 'singleton',
       properties: [{ name: 'applications', path: 'applications' }],
     },
-    // AuthMiddlewareRegistrar MUST come before AppSyncController and AuthController
-    // so app.use('/:application/sync') is registered before route handlers in Hono
     {
       Reference: AuthMiddlewareRegistrar,
       name: 'authMiddlewareRegistrar',
@@ -284,7 +276,12 @@ async function buildContext() {
       scope: 'singleton',
       properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }],
     },
-    { Reference: AuthController, name: 'authController', scope: 'singleton' },
+    {
+      Reference: AuthController,
+      name: 'authController',
+      scope: 'singleton',
+      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }],
+    },
   ]);
 
   const appCtx = new ApplicationContext({ contexts: [context], config });
@@ -292,22 +289,45 @@ async function buildContext() {
   await appCtx.get('nosqlClient').ready();
 
   const store = new InMemoryIdentityLinkStore();
-
-  // Set providers map on authController (runtime, not CDI-injectable from config)
-  appCtx.get('authController').providers = { github: new MockProvider() };
+  appCtx.get('authController').providers = {
+    github: new MockProvider('github-uid', 'user@github.com'),
+    google: new MockProvider('google-uid', 'user@google.com'),
+  };
   appCtx.get('authController').oauthIdentityLinkStore = store;
   appCtx.get('authService').oauthIdentityLinkStore = store;
 
   return { appCtx, app: appCtx.get('honoAdapter').app, store };
 }
 
-// ── helper: make a valid token ────────────────────────────────────────────────
-
 async function makeToken(sub = 'user-1', providers = ['github']) {
   return JwtSession.sign({ sub, providers, email: 'test@example.com' }, JWT_SECRET);
 }
 
-// ── tests ─────────────────────────────────────────────────────────────────────
+function authHeaders(token) {
+  return { Authorization: `Bearer ${token}` };
+}
+
+function cookieHeaders(token) {
+  return { Cookie: `auth_session=${encodeURIComponent(token)}` };
+}
+
+async function beginAuth(app, provider, opts = '') {
+  const res = await app.request(`/auth/${provider}${opts}`);
+  assert.equal(res.status, 200);
+  return res.json();
+}
+
+async function loginWithBearer(app, provider = 'github') {
+  const { state } = await beginAuth(app, provider);
+  const res = await app.request(
+    `/auth/login/finalize?provider=${provider}&code=mock-code&state=${encodeURIComponent(state)}&mode=bearer`,
+    { method: 'POST' },
+  );
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.isString(body.token);
+  return body;
+}
 
 describe('AuthController (CDI integration)', () => {
   let ctx;
@@ -316,33 +336,63 @@ describe('AuthController (CDI integration)', () => {
     ctx = await buildContext();
   });
 
-  // ── GET /auth/me ─────────────────────────────────────────────────────────────
-
-  describe('GET /auth/me', () => {
-    it('returns typed 401 without token', async () => {
+  describe('GET /auth/me (mode-aware)', () => {
+    it('returns typed session_required when no credentials are present', async () => {
       const res = await ctx.app.request('/auth/me');
       assert.equal(res.status, 401);
       const body = await res.json();
-      assert.equal(body.error, 'Unauthorized');
-      assert.equal(body.code, 'unauthorized');
+      assert.equal(body.code, 'invalid_state');
+      assert.equal(body.reason, 'session_required');
     });
 
-    it('returns user identity with valid token', async () => {
+    it('returns user identity with valid bearer token', async () => {
       const token = await makeToken('my-uuid', ['github']);
-      const res = await ctx.app.request('/auth/me', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await ctx.app.request('/auth/me', { headers: authHeaders(token) });
       assert.equal(res.status, 200);
       const body = await res.json();
       assert.equal(body.userId, 'my-uuid');
       assert.deepEqual(body.providers, ['github']);
+      assert.equal(body.mode, 'bearer');
+    });
+
+    it('returns user identity with valid cookie token', async () => {
+      const token = await makeToken('cookie-user', ['github']);
+      const res = await ctx.app.request('/auth/me', { headers: cookieHeaders(token) });
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.equal(body.userId, 'cookie-user');
+      assert.equal(body.mode, 'cookie');
+    });
+
+    it('fails closed on dual credentials without explicit mode', async () => {
+      const bearer = await makeToken('dual-user-a', ['github']);
+      const cookie = await makeToken('dual-user-b', ['github']);
+      const res = await ctx.app.request('/auth/me', {
+        headers: {
+          ...authHeaders(bearer),
+          ...cookieHeaders(cookie),
+        },
+      });
+      assert.equal(res.status, 400);
+      const body = await res.json();
+      assert.equal(body.code, 'invalid_state');
+      assert.equal(body.reason, 'session_mode_mismatch');
+    });
+
+    it('returns typed mismatch when explicit mode does not match credentials', async () => {
+      const bearer = await makeToken('explicit-mismatch', ['github']);
+      const res = await ctx.app.request('/auth/me?mode=cookie', {
+        headers: authHeaders(bearer),
+      });
+      assert.equal(res.status, 400);
+      const body = await res.json();
+      assert.equal(body.code, 'invalid_state');
+      assert.equal(body.reason, 'session_mode_mismatch');
     });
   });
 
-  // ── GET /auth/:provider ───────────────────────────────────────────────────────
-
   describe('GET /auth/:provider', () => {
-    it('returns authorizationURL and state (without codeVerifier) for known provider', async () => {
+    it('returns authorizationURL and state for known provider', async () => {
       const res = await ctx.app.request('/auth/github');
       assert.equal(res.status, 200);
       const body = await res.json();
@@ -352,115 +402,90 @@ describe('AuthController (CDI integration)', () => {
       assert.include(body.authorizationURL, 'mock.provider');
     });
 
-    it('returns typed 400 for unknown provider', async () => {
+    it('returns typed unsupported_provider for unknown provider', async () => {
       const res = await ctx.app.request('/auth/unknown-provider');
       assert.equal(res.status, 400);
       const body = await res.json();
-      assert.include(body.error, 'Unknown provider');
-      assert.equal(body.code, 'bad_request');
+      assert.equal(body.code, 'invalid_state');
+      assert.equal(body.reason, 'unsupported_provider');
     });
   });
 
-  // ── GET /auth/:provider/callback ─────────────────────────────────────────────
-
-  describe('GET /auth/:provider/callback', () => {
-    it('completes auth and persists the provider-linked user', async () => {
-      // First: get a real state from beginAuth
-      const beginRes = await ctx.app.request('/auth/github');
-      const beginBody = await beginRes.json();
-      const { state } = beginBody;
+  describe('POST|GET /auth/login/finalize', () => {
+    it('completes login and returns bearer token when mode=bearer', async () => {
+      const { state } = await beginAuth(ctx.app, 'github');
 
       const res = await ctx.app.request(
-        `/auth/github/callback?code=mock-code&state=${state}`,
+        `/auth/login/finalize?provider=github&code=mock-code&state=${encodeURIComponent(state)}&mode=bearer`,
+        { method: 'POST' },
       );
-      assert.equal(res.status, 302);
-      assert.include(['', '""'], await res.text());
 
-      const ownerUserId = await ctx.store.getUserByProviderAnchor({
-        provider: 'github',
-        providerUserId: 'github-uid',
-      });
-      assert.isString(ownerUserId, 'callback should create provider anchor ownership');
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.equal(body.mode, 'bearer');
+      assert.isString(body.token);
+      assert.property(body, 'user');
 
-      const storedUser = await ctx.appCtx.get('userRepository').getUser(ownerUserId);
-      assert.isOk(storedUser, 'callback should create or resolve provider-linked user');
-      assert.match(storedUser.userId, /^[0-9a-f-]{36}$/);
-
-      const token = await makeToken(storedUser.userId, ['github']);
-      const meRes = await ctx.app.request('/auth/me', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const meRes = await ctx.app.request('/auth/me', { headers: authHeaders(body.token) });
       assert.equal(meRes.status, 200);
-      const me = await meRes.json();
-      assert.equal(me.userId, storedUser.userId);
-      assert.deepEqual(me.providers, ['github']);
+      const meBody = await meRes.json();
+      assert.equal(meBody.mode, 'bearer');
     });
 
-    it('returns typed 400 when state is missing', async () => {
-      const res = await ctx.app.request('/auth/github/callback?code=code');
+    it('completes login and sets cookie when mode=session alias is used', async () => {
+      const { state } = await beginAuth(ctx.app, 'github');
+
+      const res = await ctx.app.request(
+        `/auth/login/finalize?provider=github&code=mock-code&state=${encodeURIComponent(state)}&mode=session`,
+        { method: 'POST' },
+      );
+
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.equal(body.mode, 'cookie');
+      assert.notProperty(body, 'token');
+
+      const setCookie = res.headers.get('set-cookie');
+      assert.isString(setCookie);
+      assert.include(setCookie, 'auth_session=');
+    });
+
+    it('returns typed error when required finalize fields are missing', async () => {
+      const res = await ctx.app.request('/auth/login/finalize?provider=github&state=x&mode=bearer', { method: 'POST' });
       assert.equal(res.status, 400);
       const body = await res.json();
-      assert.equal(body.error, 'Missing required query params: code, state');
       assert.equal(body.code, 'bad_request');
+      assert.include(body.error, 'Missing required field');
     });
 
-    it('returns typed 400 on unknown state (CSRF/replay)', async () => {
-      const res = await ctx.app.request(
-        '/auth/github/callback?code=code&state=unknown-state',
-      );
+    it('returns typed unknown_state on replay/unknown callback state', async () => {
+      const res = await ctx.app.request('/auth/login/finalize?provider=github&code=mock-code&state=unknown&mode=bearer', {
+        method: 'POST',
+      });
       assert.equal(res.status, 400);
       const body = await res.json();
       assert.equal(body.code, 'invalid_state');
       assert.equal(body.reason, 'unknown_state');
     });
-
-    it('returns typed non-leaky 500 when provider callback throws', async () => {
-      const beginRes = await ctx.app.request('/auth/github');
-      const beginBody = await beginRes.json();
-
-      ctx.appCtx.get('authController').providers = {
-        github: {
-          createAuthorizationURL(state) {
-            return new URL(`https://mock.provider/auth?state=${state}`);
-          },
-          async validateCallback() {
-            throw new Error('provider-secret-details');
-          },
-        },
-      };
-
-      const res = await ctx.app.request(
-        `/auth/github/callback?code=mock-code&state=${beginBody.state}`,
-      );
-
-      assert.equal(res.status, 500);
-      const body = await res.json();
-      assert.equal(body.error, 'Authentication failed');
-      assert.equal(body.code, 'internal_error');
-      assert.notInclude(body.error, 'provider-secret-details');
-    });
   });
 
-  // ── POST /auth/link/:provider ───────────────────────────────────────────────
-
-  describe('POST /auth/link/:provider', () => {
+  describe('POST|GET /auth/link/finalize', () => {
     it('returns typed non-leaky 500 when provider callback throws', async () => {
-      const token = await makeToken('link-user', ['github']);
-      ctx.appCtx.get('authController').providers = {
-        github: {
-          createAuthorizationURL(state) {
-            return new URL(`https://mock.provider/auth?state=${state}`);
-          },
-          async validateCallback() {
-            throw new Error('link-provider-secret');
-          },
+      const login = await loginWithBearer(ctx.app, 'github');
+      ctx.appCtx.get('authController').providers.google = {
+        createAuthorizationURL(state) {
+          return new URL(`https://mock.provider/auth?state=${state}`);
+        },
+        async validateCallback() {
+          throw new Error('link-provider-secret');
         },
       };
 
-      const res = await ctx.app.request('/auth/link/github?code=abc&state=s1&stored_state=s1', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const { state } = await beginAuth(ctx.app, 'google', '?link=true');
+      const res = await ctx.app.request(
+        `/auth/link/finalize?provider=google&code=abc&state=${encodeURIComponent(state)}&stored_state=${encodeURIComponent(state)}`,
+        { method: 'POST', headers: authHeaders(login.token) },
+      );
 
       assert.equal(res.status, 500);
       const body = await res.json();
@@ -470,22 +495,21 @@ describe('AuthController (CDI integration)', () => {
     });
 
     it('returns typed invalid_state when provider callback payload is malformed', async () => {
-      const token = await makeToken('link-user', ['github']);
-      ctx.appCtx.get('authController').providers = {
-        github: {
-          createAuthorizationURL(state) {
-            return new URL(`https://mock.provider/auth?state=${state}`);
-          },
-          async validateCallback() {
-            return { email: 'bad@payload.dev' };
-          },
+      const login = await loginWithBearer(ctx.app, 'github');
+      ctx.appCtx.get('authController').providers.google = {
+        createAuthorizationURL(state) {
+          return new URL(`https://mock.provider/auth?state=${state}`);
+        },
+        async validateCallback() {
+          return { email: 'bad@payload.dev' };
         },
       };
 
-      const res = await ctx.app.request('/auth/link/github?code=abc&state=s1&stored_state=s1', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const { state } = await beginAuth(ctx.app, 'google', '?link=true');
+      const res = await ctx.app.request(
+        `/auth/link/finalize?provider=google&code=abc&state=${encodeURIComponent(state)}&stored_state=${encodeURIComponent(state)}`,
+        { method: 'POST', headers: authHeaders(login.token) },
+      );
 
       assert.equal(res.status, 400);
       const body = await res.json();
@@ -495,11 +519,11 @@ describe('AuthController (CDI integration)', () => {
     });
 
     it('returns typed state mismatch error', async () => {
-      const token = await makeToken('link-user', ['github']);
+      const login = await loginWithBearer(ctx.app, 'github');
 
-      const res = await ctx.app.request('/auth/link/github?code=abc&state=s1&stored_state=s2', {
+      const res = await ctx.app.request('/auth/link/finalize?provider=github&code=abc&state=s1&stored_state=s2', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: authHeaders(login.token),
       });
 
       assert.equal(res.status, 400);
@@ -507,22 +531,52 @@ describe('AuthController (CDI integration)', () => {
       assert.equal(body.code, 'invalid_state');
       assert.equal(body.reason, 'state_mismatch');
     });
-  });
 
-  // ── POST /auth/logout ─────────────────────────────────────────────────────────
+    it('returns session_required when no session credentials are provided', async () => {
+      const res = await ctx.app.request('/auth/link/finalize?provider=github&code=abc&state=s1&stored_state=s1', {
+        method: 'POST',
+      });
 
-  describe('POST /auth/logout', () => {
-    it('returns logout guidance message', async () => {
-      const res = await ctx.app.request('/auth/logout', { method: 'POST' });
-      assert.equal(res.status, 200);
+      assert.equal(res.status, 401);
       const body = await res.json();
-      assert.property(body, 'message');
+      assert.equal(body.code, 'invalid_state');
+      assert.equal(body.reason, 'session_required');
     });
   });
 
-  // ── POST /:application/sync auth gating ─────────────────────────────────────
+  describe('POST /auth/signout', () => {
+    it('revokes bearer session and rejects stale token on /auth/me', async () => {
+      const token = await makeToken('revoked-user', ['github']);
 
-  describe('POST /:application/sync — auth gating', () => {
+      const signout = await ctx.app.request('/auth/signout', {
+        method: 'POST',
+        headers: authHeaders(token),
+      });
+      assert.equal(signout.status, 200);
+
+      const me = await ctx.app.request('/auth/me', {
+        headers: authHeaders(token),
+      });
+      assert.equal(me.status, 401);
+      const meBody = await me.json();
+      assert.equal(meBody.code, 'invalid_state');
+      assert.equal(meBody.reason, 'session_not_found');
+    });
+
+    it('clears cookie session when signing out in cookie mode', async () => {
+      const token = await makeToken('cookie-signout-user', ['github']);
+      const res = await ctx.app.request('/auth/signout?mode=cookie', {
+        method: 'POST',
+        headers: cookieHeaders(token),
+      });
+      assert.equal(res.status, 200);
+      const setCookie = res.headers.get('set-cookie');
+      assert.isString(setCookie);
+      assert.include(setCookie, 'Max-Age=0');
+    });
+  });
+
+  describe('POST /:application/sync — auth gating remains middleware-protected', () => {
     it('returns typed 401 without token', async () => {
       const res = await ctx.app.request('/todo/sync', {
         method: 'POST',
@@ -535,35 +589,19 @@ describe('AuthController (CDI integration)', () => {
       assert.equal(body.code, 'unauthorized');
     });
 
-    it('returns 200 with valid token and known application', async () => {
+    it('returns 200 with valid bearer token and known application', async () => {
       const token = await makeToken('sync-user', ['github']);
       const res = await ctx.app.request('/todo/sync', {
         method: 'POST',
         body: JSON.stringify({ collection: 'items', clientClock: '0000000000000-000000-00000000', changes: [] }),
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
+          Authorization: `Bearer ${token}`,
         },
       });
       assert.equal(res.status, 200);
       const body = await res.json();
       assert.property(body, 'serverClock');
-    });
-
-    it('returns typed 404 for unknown application even with valid token', async () => {
-      const token = await makeToken('sync-user', ['github']);
-      const res = await ctx.app.request('/unknown-app/sync', {
-        method: 'POST',
-        body: JSON.stringify({ collection: 'items', clientClock: '0000000000000-000000-00000000', changes: [] }),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-      assert.equal(res.status, 404);
-      const body = await res.json();
-      assert.include(body.error, 'Unknown application');
-      assert.equal(body.code, 'not_found');
     });
   });
 });

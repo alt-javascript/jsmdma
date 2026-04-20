@@ -67,7 +67,12 @@ export function authHonoStarter() {
     },
 
     // Controllers — route handlers registered after middleware
-    { Reference: AuthController, name: 'authController', scope: 'singleton' },
+    {
+      Reference: AuthController,
+      name: 'authController',
+      scope: 'singleton',
+      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }],
+    },
     {
       Reference: OrgController,
       name:      'orgController',

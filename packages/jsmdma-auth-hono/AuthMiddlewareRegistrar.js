@@ -6,16 +6,22 @@
  * route handlers — Hono middleware order is significant.
  *
  * Register this component BEFORE AuthController in the CDI context array to
- * guarantee the middleware is applied first.
+ * guarantee middleware ordering on protected non-lifecycle routes.
+ *
+ * IMPORTANT:
+ * - Lifecycle auth routes (/auth/login/finalize, /auth/me, /auth/link/finalize,
+ *   /auth/unlink/:provider, /auth/signout) are mode-aware and resolve credentials
+ *   in AuthController (cookie or bearer).
+ * - This registrar continues to bearer-protect non-lifecycle application/org
+ *   surfaces.
  *
  * Protected paths:
- *   /auth/me            — GET current user identity
- *   /:application/sync   — POST sync endpoint (M003)
- *   /:application/search — POST search endpoint (M008)
- *   /orgs               — POST create org, GET list orgs (M004)
- *   /orgs/*             — all org member management routes (M004)
- *   /docIndex/*         — all DocIndexController routes (M007)
- *   /account/*          — all account export routes (M008)
+ *   /:application/sync   — POST sync endpoint
+ *   /:application/search — POST search endpoint
+ *   /orgs               — POST create org, GET list orgs
+ *   /orgs/*             — all org member management routes
+ *   /docIndex/*         — all DocIndexController routes
+ *   /account/*          — all account export routes
  *
  * CDI autowires:
  *   this.jwtSecret — JWT secret string (required, >= 32 chars; fail-fast on invalid)
@@ -41,15 +47,12 @@ export default class AuthMiddlewareRegistrar {
     }
 
     const mw = authMiddleware(this.jwtSecret, this.logger);
-    app.use('/auth/me',           mw);
-    app.use('/auth/link/*',       mw);
-    app.use('/auth/providers/*',  mw);
     app.use('/:application/sync',   mw);
     app.use('/:application/search', mw);
     app.use('/orgs',                mw);
     app.use('/orgs/*',              mw);
     app.use('/docIndex/*',          mw);
     app.use('/account/*',           mw);
-    this.logger?.debug?.('[AuthMiddlewareRegistrar] JWT middleware applied to /auth/me, /auth/link/*, /auth/providers/*, /:application/sync, /:application/search, /orgs, /orgs/*, /docIndex/*, /account/*');
+    this.logger?.debug?.('[AuthMiddlewareRegistrar] JWT middleware applied to /:application/sync, /:application/search, /orgs, /orgs/*, /docIndex/*, /account/*; lifecycle /auth/* handled by mode-aware AuthController');
   }
 }

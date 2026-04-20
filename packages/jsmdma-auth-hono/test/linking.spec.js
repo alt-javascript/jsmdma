@@ -1,7 +1,5 @@
 /**
- * linking.spec.js — Integration tests for provider linking and unlinking
- *
- * Tests the full link/unlink lifecycle via the HTTP layer.
+ * linking.spec.js — Integration tests for provider linking/unlinking via mode-aware lifecycle routes
  */
 import { assert } from 'chai';
 import '@alt-javascript/jsnosqlc-memory';
@@ -59,8 +57,8 @@ function assertSupportedProvider(value, operation) {
 
 class InMemoryIdentityLinkStore {
   constructor() {
-    this.anchorOwners = new Map(); // `${provider}::${providerUserId}` -> userId
-    this.userLinks = new Map(); // userId -> Map<provider, providerUserId>
+    this.anchorOwners = new Map();
+    this.userLinks = new Map();
     this.hooks = {
       getUserByProviderAnchor: null,
       link: null,
@@ -234,22 +232,20 @@ class InMemoryIdentityLinkStore {
   }
 }
 
-// ── MockProvider ──────────────────────────────────────────────────────────────
-
 class MockProvider {
   constructor(providerUserId, email) {
     this._uid = providerUserId;
     this._email = email;
   }
+
   createAuthorizationURL(state) {
     return new URL(`https://mock.provider/auth?state=${state}`);
   }
+
   async validateCallback() {
     return { providerUserId: this._uid, email: this._email };
   }
 }
-
-// ── CDI context builder ───────────────────────────────────────────────────────
 
 async function buildContext(providers = {}) {
   const config = new EphemeralConfig({
@@ -292,7 +288,12 @@ async function buildContext(providers = {}) {
       scope: 'singleton',
       properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }],
     },
-    { Reference: AuthController, name: 'authController', scope: 'singleton' },
+    {
+      Reference: AuthController,
+      name: 'authController',
+      scope: 'singleton',
+      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }],
+    },
   ]);
 
   const appCtx = new ApplicationContext({ contexts: [context], config });
@@ -312,8 +313,6 @@ async function buildContext(providers = {}) {
   };
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
-
 function authHeaders(token) {
   return { Authorization: `Bearer ${token}` };
 }
@@ -322,18 +321,24 @@ function encode(value) {
   return encodeURIComponent(value ?? '');
 }
 
-async function completeAuthCallback(app, provider, state) {
-  const res = await app.request(`/auth/${provider}/callback?code=mock-code&state=${encode(state)}`);
-  assert.equal(res.status, 302, `Expected callback 302, got ${res.status}`);
+async function beginAuth(app, provider, query = '') {
+  const res = await app.request(`/auth/${provider}${query}`);
+  assert.equal(res.status, 200, `Expected begin auth 200, got ${res.status}`);
+  return res.json();
 }
 
 /** Login via a mock provider and return { user, token } */
 async function loginAs(app, repo, store, provider, providerUserId) {
-  const beginRes = await app.request(`/auth/${provider}`);
-  assert.equal(beginRes.status, 200, `Expected begin auth 200, got ${beginRes.status}`);
-  const { state } = await beginRes.json();
+  const begin = await beginAuth(app, provider);
 
-  await completeAuthCallback(app, provider, state);
+  const finalize = await app.request(
+    `/auth/login/finalize?provider=${encode(provider)}&code=mock-code&state=${encode(begin.state)}&mode=bearer`,
+    { method: 'POST' },
+  );
+  assert.equal(finalize.status, 200, `Expected login finalize 200, got ${finalize.status}`);
+
+  const body = await finalize.json();
+  assert.isString(body.token);
 
   const userId = await store.getUserByProviderAnchor({ provider, providerUserId });
   assert.isString(userId, `Expected userId for provider=${provider} providerUserId=${providerUserId}`);
@@ -341,57 +346,39 @@ async function loginAs(app, repo, store, provider, providerUserId) {
   const userRecord = await repo.getUser(userId);
   assert(userRecord, `Expected user record for userId=${userId}`);
 
-  const providers = userRecord.providers.map((p) => p.provider);
-  const token = await JwtSession.sign({
-    sub: userRecord.userId,
-    providers,
-    email: userRecord.email ?? null,
-  }, JWT_SECRET);
-
   return {
-    token,
+    token: body.token,
     user: {
       userId: userRecord.userId,
       email: userRecord.email ?? null,
-      providers,
+      providers: userRecord.providers.map((p) => p.provider),
     },
   };
 }
 
-async function beginLink(app, provider, token) {
-  const beginRes = await app.request(`/auth/${provider}?link=true`, {
-    headers: authHeaders(token),
-  });
-  assert.equal(beginRes.status, 200, `Expected begin link 200, got ${beginRes.status}`);
-
-  const { state } = await beginRes.json();
-
-  return { code: 'mock-code', state, codeVerifier: '' };
+async function beginLink(app, provider) {
+  const beginRes = await beginAuth(app, provider, '?link=true');
+  return { code: 'mock-code', state: beginRes.state, codeVerifier: '' };
 }
 
-// ── link provider ─────────────────────────────────────────────────────────────
-
-describe('Provider linking', () => {
-
+describe('Provider linking (mode-aware lifecycle routes)', () => {
   it('adds a second provider to an existing user', async () => {
     const { app, repo, store } = await buildContext({
       github: new MockProvider('gh-uid-1', 'user@github.com'),
       google: new MockProvider('google-uid-1', 'user@google.com'),
     });
 
-    // Login with github
-    const { user: u1, token } = await loginAs(app, repo, store, 'github', 'gh-uid-1');
-    assert.deepEqual(u1.providers, ['github']);
+    const { user: before, token } = await loginAs(app, repo, store, 'github', 'gh-uid-1');
+    assert.deepEqual(before.providers, ['github']);
 
-    // Link google
-    const { code, state, codeVerifier } = await beginLink(app, 'google', token);
+    const { code, state, codeVerifier } = await beginLink(app, 'google');
     const linkRes = await app.request(
-      `/auth/link/google?code=${encode(code)}&state=${encode(state)}&stored_state=${encode(state)}&code_verifier=${encode(codeVerifier)}`,
+      `/auth/link/finalize?provider=google&code=${encode(code)}&state=${encode(state)}&stored_state=${encode(state)}&code_verifier=${encode(codeVerifier)}`,
       { method: 'POST', headers: authHeaders(token) },
     );
+
     assert.equal(linkRes.status, 200, `Expected 200, got ${linkRes.status}`);
     const { user: linked } = await linkRes.json();
-    assert.lengthOf(linked.providers, 2);
     const providerNames = linked.providers.map((p) => p.provider).sort();
     assert.deepEqual(providerNames, ['github', 'google']);
   });
@@ -403,9 +390,9 @@ describe('Provider linking', () => {
     });
 
     const { user: before, token } = await loginAs(app, repo, store, 'github', 'gh-uid-stable');
-    const { code, state, codeVerifier } = await beginLink(app, 'google', token);
+    const { code, state, codeVerifier } = await beginLink(app, 'google');
     const linkRes = await app.request(
-      `/auth/link/google?code=${encode(code)}&state=${encode(state)}&stored_state=${encode(state)}&code_verifier=${encode(codeVerifier)}`,
+      `/auth/link/finalize?provider=google&code=${encode(code)}&state=${encode(state)}&stored_state=${encode(state)}&code_verifier=${encode(codeVerifier)}`,
       { method: 'POST', headers: authHeaders(token) },
     );
     const { user: after } = await linkRes.json();
@@ -418,16 +405,12 @@ describe('Provider linking', () => {
       google: new MockProvider('google-uid-other', 'other@google.com'),
     });
 
-    // Create user A with github
     await loginAs(app, repo, store, 'github', 'gh-uid-taken');
-
-    // Create user B with google
     const { token: tokenB } = await loginAs(app, repo, store, 'google', 'google-uid-other');
 
-    // Try to link github (already taken by user A) to user B
-    const { code, state, codeVerifier } = await beginLink(app, 'github', tokenB);
+    const { code, state, codeVerifier } = await beginLink(app, 'github');
     const linkRes = await app.request(
-      `/auth/link/github?code=${encode(code)}&state=${encode(state)}&stored_state=${encode(state)}&code_verifier=${encode(codeVerifier)}`,
+      `/auth/link/finalize?provider=github&code=${encode(code)}&state=${encode(state)}&stored_state=${encode(state)}&code_verifier=${encode(codeVerifier)}`,
       { method: 'POST', headers: authHeaders(tokenB) },
     );
     assert.equal(linkRes.status, 409);
@@ -444,18 +427,16 @@ describe('Provider linking', () => {
 
     const { token } = await loginAs(app, repo, store, 'github', 'gh-uid-replay');
 
-    // First link
-    const first = await beginLink(app, 'google', token);
+    const first = await beginLink(app, 'google');
     const firstRes = await app.request(
-      `/auth/link/google?code=${encode(first.code)}&state=${encode(first.state)}&stored_state=${encode(first.state)}&code_verifier=${encode(first.codeVerifier)}`,
+      `/auth/link/finalize?provider=google&code=${encode(first.code)}&state=${encode(first.state)}&stored_state=${encode(first.state)}&code_verifier=${encode(first.codeVerifier)}`,
       { method: 'POST', headers: authHeaders(token) },
     );
     assert.equal(firstRes.status, 200);
 
-    // Replay link for same anchor/user
-    const second = await beginLink(app, 'google', token);
+    const second = await beginLink(app, 'google');
     const secondRes = await app.request(
-      `/auth/link/google?code=${encode(second.code)}&state=${encode(second.state)}&stored_state=${encode(second.state)}&code_verifier=${encode(second.codeVerifier)}`,
+      `/auth/link/finalize?provider=google&code=${encode(second.code)}&state=${encode(second.state)}&stored_state=${encode(second.state)}&code_verifier=${encode(second.codeVerifier)}`,
       { method: 'POST', headers: authHeaders(token) },
     );
     assert.equal(secondRes.status, 200);
@@ -466,21 +447,21 @@ describe('Provider linking', () => {
     assert.lengthOf(providerNames, 2, 'duplicate replay must not duplicate provider projection');
   });
 
-  it('returns typed 400 for unsupported provider names', async () => {
+  it('returns typed unsupported_provider for unsupported provider names', async () => {
     const { app, repo, store } = await buildContext({
       github: new MockProvider('gh-uid-x', 'x@github.com'),
     });
 
     const { token } = await loginAs(app, repo, store, 'github', 'gh-uid-x');
-    const res = await app.request('/auth/link/linkedin?code=x&state=y&stored_state=y', {
+    const res = await app.request('/auth/link/finalize?provider=linkedin&code=x&state=y&stored_state=y', {
       method: 'POST',
       headers: authHeaders(token),
     });
 
     assert.equal(res.status, 400);
     const body = await res.json();
-    assert.equal(body.code, 'bad_request');
-    assert.include(body.error, 'Unknown provider');
+    assert.equal(body.code, 'invalid_state');
+    assert.equal(body.reason, 'unsupported_provider');
   });
 
   it('returns typed 400 for missing link query parameters', async () => {
@@ -490,7 +471,7 @@ describe('Provider linking', () => {
 
     const { token } = await loginAs(app, repo, store, 'github', 'gh-uid-missing');
 
-    const res = await app.request('/auth/link/github?code=x&state=y', {
+    const res = await app.request('/auth/link/finalize?provider=github&code=x&state=y', {
       method: 'POST',
       headers: authHeaders(token),
     });
@@ -498,7 +479,7 @@ describe('Provider linking', () => {
     assert.equal(res.status, 400);
     const body = await res.json();
     assert.equal(body.code, 'bad_request');
-    assert.include(body.error, 'Missing required query params');
+    assert.include(body.error, 'Missing required field');
   });
 
   it('returns typed invalid_state for state mismatch', async () => {
@@ -508,7 +489,7 @@ describe('Provider linking', () => {
 
     const { token } = await loginAs(app, repo, store, 'github', 'gh-uid-state');
 
-    const res = await app.request('/auth/link/github?code=x&state=s1&stored_state=s2', {
+    const res = await app.request('/auth/link/finalize?provider=github&code=x&state=s1&stored_state=s2', {
       method: 'POST',
       headers: authHeaders(token),
     });
@@ -519,37 +500,33 @@ describe('Provider linking', () => {
     assert.equal(body.reason, 'state_mismatch');
   });
 
-  it('returns 401 without token', async () => {
+  it('returns typed session_required without token', async () => {
     const { app } = await buildContext({ github: new MockProvider('gh-uid', 'u@g.com') });
-    const res = await app.request(
-      '/auth/link/github?code=x&state=y&stored_state=y',
-      { method: 'POST' },
-    );
+    const res = await app.request('/auth/link/finalize?provider=github&code=x&state=y&stored_state=y', {
+      method: 'POST',
+    });
     assert.equal(res.status, 401);
+    const body = await res.json();
+    assert.equal(body.code, 'invalid_state');
+    assert.equal(body.reason, 'session_required');
   });
-
 });
 
-// ── unlink provider ───────────────────────────────────────────────────────────
-
-describe('Provider unlinking', () => {
-
+describe('Provider unlinking (mode-aware lifecycle routes)', () => {
   it('removes a provider when user has multiple', async () => {
     const { app, repo, store } = await buildContext({
       github: new MockProvider('gh-uid-2', 'user2@github.com'),
       google: new MockProvider('google-uid-2', 'user2@google.com'),
     });
 
-    // Login with github, then link google
     const { token } = await loginAs(app, repo, store, 'github', 'gh-uid-2');
-    const { code, state, codeVerifier } = await beginLink(app, 'google', token);
+    const { code, state, codeVerifier } = await beginLink(app, 'google');
     await app.request(
-      `/auth/link/google?code=${encode(code)}&state=${encode(state)}&stored_state=${encode(state)}&code_verifier=${encode(codeVerifier)}`,
+      `/auth/link/finalize?provider=google&code=${encode(code)}&state=${encode(state)}&stored_state=${encode(state)}&code_verifier=${encode(codeVerifier)}`,
       { method: 'POST', headers: authHeaders(token) },
     );
 
-    // Unlink github
-    const unlinkRes = await app.request('/auth/providers/github', {
+    const unlinkRes = await app.request('/auth/unlink/github', {
       method: 'DELETE',
       headers: authHeaders(token),
     });
@@ -557,6 +534,27 @@ describe('Provider unlinking', () => {
     const { providers } = await unlinkRes.json();
     assert.lengthOf(providers, 1);
     assert.equal(providers[0].provider, 'google');
+  });
+
+  it('supports POST /auth/unlink/:provider as alias', async () => {
+    const { app, repo, store } = await buildContext({
+      github: new MockProvider('gh-uid-post', 'user@github.com'),
+      google: new MockProvider('google-uid-post', 'user@google.com'),
+    });
+
+    const { token } = await loginAs(app, repo, store, 'github', 'gh-uid-post');
+    const { code, state, codeVerifier } = await beginLink(app, 'google');
+    await app.request(
+      `/auth/link/finalize?provider=google&code=${encode(code)}&state=${encode(state)}&stored_state=${encode(state)}&code_verifier=${encode(codeVerifier)}`,
+      { method: 'POST', headers: authHeaders(token) },
+    );
+
+    const unlinkRes = await app.request('/auth/unlink/github', {
+      method: 'POST',
+      headers: authHeaders(token),
+    });
+
+    assert.equal(unlinkRes.status, 200);
   });
 
   it('returns typed not-found when unlinking a non-linked provider', async () => {
@@ -567,7 +565,7 @@ describe('Provider unlinking', () => {
 
     const { token } = await loginAs(app, repo, store, 'github', 'gh-uid-not-linked');
 
-    const res = await app.request('/auth/providers/google', {
+    const res = await app.request('/auth/unlink/google', {
       method: 'DELETE',
       headers: authHeaders(token),
     });
@@ -578,27 +576,55 @@ describe('Provider unlinking', () => {
     assert.equal(body.reason, 'provider_not_linked');
   });
 
-  it('returns typed lockout when trying to remove the last provider', async () => {
+  it('returns last_provider_lockout when trying to remove the last provider', async () => {
     const { app, repo, store } = await buildContext({
       github: new MockProvider('gh-uid-last', 'last@github.com'),
     });
 
     const { token } = await loginAs(app, repo, store, 'github', 'gh-uid-last');
 
-    const res = await app.request('/auth/providers/github', {
+    const res = await app.request('/auth/unlink/github', {
       method: 'DELETE',
       headers: authHeaders(token),
     });
     assert.equal(res.status, 409);
     const body = await res.json();
     assert.equal(body.code, 'last_provider_unlink_forbidden');
-    assert.equal(body.reason, 'last_linked_provider');
+    assert.equal(body.reason, 'last_provider_lockout');
   });
 
-  it('returns 401 without token', async () => {
+  it('returns session_required without token', async () => {
     const { app } = await buildContext({ github: new MockProvider('gh', 'u@g.com') });
-    const res = await app.request('/auth/providers/github', { method: 'DELETE' });
+    const res = await app.request('/auth/unlink/github', { method: 'DELETE' });
     assert.equal(res.status, 401);
+    const body = await res.json();
+    assert.equal(body.code, 'invalid_state');
+    assert.equal(body.reason, 'session_required');
   });
 
+  it('returns deterministic timeout reason when link store read times out', async () => {
+    const { app, repo, store } = await buildContext({
+      github: new MockProvider('gh-uid-timeout', 'u@github.com'),
+      google: new MockProvider('google-uid-timeout', 'u@google.com'),
+    });
+
+    const { token } = await loginAs(app, repo, store, 'github', 'gh-uid-timeout');
+    const { code, state, codeVerifier } = await beginLink(app, 'google');
+
+    store.setHook('getLinksForUser', async () => {
+      const err = new Error('dependency timeout while reading links');
+      err.code = 'ETIMEDOUT';
+      throw err;
+    });
+
+    const res = await app.request(
+      `/auth/link/finalize?provider=google&code=${encode(code)}&state=${encode(state)}&stored_state=${encode(state)}&code_verifier=${encode(codeVerifier)}`,
+      { method: 'POST', headers: authHeaders(token) },
+    );
+
+    assert.equal(res.status, 503);
+    const body = await res.json();
+    assert.equal(body.code, 'invalid_state');
+    assert.equal(body.reason, 'dependency_timeout');
+  });
 });
