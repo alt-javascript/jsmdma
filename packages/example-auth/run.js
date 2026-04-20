@@ -25,6 +25,7 @@ import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
 import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
+import { oauthJsnosqlcStarter } from '@alt-javascript/boot-oauth-jsnosqlc';
 import {
   SyncRepository,
   SyncService,
@@ -36,6 +37,35 @@ import { AppSyncController } from '@alt-javascript/jsmdma-hono';
 import { authHonoStarter } from '@alt-javascript/jsmdma-auth-hono';
 import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 import { SignJWT } from 'jose';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+
+async function registerBootWorkspaceMemoryDriver() {
+  let bootJsnosqlcEntry = null;
+  try {
+    bootJsnosqlcEntry = require.resolve('@alt-javascript/boot-jsnosqlc');
+  } catch {
+    return;
+  }
+
+  const bootMemoryDriverEntry = path.join(
+    path.dirname(bootJsnosqlcEntry),
+    '../../node_modules/@alt-javascript/jsnosqlc-memory/index.js',
+  );
+
+  try {
+    await import(pathToFileURL(bootMemoryDriverEntry).href);
+  } catch (err) {
+    if (err?.code !== 'ERR_MODULE_NOT_FOUND' && err?.code !== 'ENOENT') {
+      throw err;
+    }
+  }
+}
+
+await registerBootWorkspaceMemoryDriver();
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
@@ -135,6 +165,7 @@ async function buildContext(providers) {
       scope: 'singleton',
       properties: [{ name: 'applications', path: 'applications' }],
     },
+    ...oauthJsnosqlcStarter(),
     ...authHonoStarter(),
     { Reference: AppSyncController, name: 'appSyncController', scope: 'singleton' },
   ]);
@@ -145,7 +176,11 @@ async function buildContext(providers) {
 
   appCtx.get('authController').providers = providers;
 
-  return { app: appCtx.get('honoAdapter').app, appCtx };
+  return {
+    app: appCtx.get('honoAdapter').app,
+    appCtx,
+    oauthIdentityLinkStore: appCtx.get('oauthIdentityLinkStore'),
+  };
 }
 
 // ── helper: login/link flow for in-process request simulation ───────────────
@@ -160,15 +195,21 @@ async function completeAuthCallback(app, providerName, state) {
   assert(res.status === 302, `callback should return 302, got ${res.status}`);
 }
 
-async function login(app, repo, providerName, providerUserId) {
+async function login(app, repo, identityLinkStore, providerName, providerUserId) {
   const beginRes = await app.request(`/auth/${providerName}`);
   assert(beginRes.status === 200, `begin auth should return 200, got ${beginRes.status}`);
 
   const { state } = await beginRes.json();
   await completeAuthCallback(app, providerName, state);
 
-  const userRecord = await repo.findByProvider(providerName, providerUserId);
-  assert(userRecord, `provider login should create/find user for ${providerName}:${providerUserId}`);
+  const userId = await identityLinkStore.getUserByProviderAnchor({
+    provider: providerName,
+    providerUserId,
+  });
+  assert(userId, `provider login should resolve owner for ${providerName}:${providerUserId}`);
+
+  const userRecord = await repo.getUser(userId);
+  assert(userRecord, `provider login should create/find user profile for userId=${userId}`);
 
   const providers = userRecord.providers.map((p) => p.provider);
   const token = await JwtSession.sign({
@@ -207,7 +248,7 @@ async function beginLink(app, providerName, token) {
 async function main() {
   banner('jsmdma — Auth Lifecycle Example');
 
-  const { app, appCtx } = await buildContext({
+  const { app, appCtx, oauthIdentityLinkStore } = await buildContext({
     github: new MockProvider('gh-user-1', 'alice@github.com'),
     google: new MockProvider('google-user-1', 'alice@google.com'),
   });
@@ -219,7 +260,7 @@ async function main() {
 
   banner('Step 1: First login via GitHub');
 
-  const { user: u1, token: token1 } = await login(app, repo, 'github', 'gh-user-1');
+  const { user: u1, token: token1 } = await login(app, repo, oauthIdentityLinkStore, 'github', 'gh-user-1');
 
   assert(u1.userId.length === 36, 'userId should be a UUID');
   assert(u1.providers.length === 1, 'should have 1 provider');

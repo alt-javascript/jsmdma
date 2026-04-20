@@ -463,6 +463,7 @@ export default class AuthController {
       await store.unlink({
         userId: user.sub,
         provider,
+        providerUserId: current.providerUserId,
       });
     } catch (err) {
       this.logger?.warn?.(`[AuthController] unlinkProvider store.unlink failed userId=${user.sub} provider=${provider}: ${err?.message ?? err}`);

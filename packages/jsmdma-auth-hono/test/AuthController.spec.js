@@ -166,6 +166,7 @@ class InMemoryIdentityLinkStore {
 
     const userId = assertNonEmptyString(input.userId, 'userId', 'unlink');
     const provider = assertSupportedProvider(input.provider, 'unlink');
+    const providerUserId = assertNonEmptyString(input.providerUserId, 'providerUserId', 'unlink');
 
     const links = this._linksForUser(userId);
     if (!links.has(provider)) {
@@ -173,6 +174,16 @@ class InMemoryIdentityLinkStore {
         'identity_link_not_found',
         'provider_not_linked',
         'provider is not linked to this user',
+        404,
+      );
+    }
+
+    const linkedProviderUserId = links.get(provider);
+    if (linkedProviderUserId !== providerUserId) {
+      throw createStoreError(
+        'identity_link_not_found',
+        'provider_not_linked',
+        'provider anchor is not linked to this user',
         404,
       );
     }
@@ -186,7 +197,6 @@ class InMemoryIdentityLinkStore {
       );
     }
 
-    const providerUserId = links.get(provider);
     const anchor = this._anchorKey(provider, providerUserId);
     links.delete(provider);
     this.userLinks.set(userId, links);
