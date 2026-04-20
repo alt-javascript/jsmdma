@@ -326,7 +326,9 @@ describe('jsmdmaHonoStarter()', () => {
     assert.equal(authMe.status, 401);
     assert.deepEqual(await authMe.json(), {
       error: 'Unauthorized',
-      code:  'unauthorized',
+      code: 'invalid_state',
+      reason: 'session_required',
+      details: {},
     });
   });
 

@@ -31,7 +31,7 @@ Typical typed oauth outcomes surfaced to route layers:
 
 - `identity_link_conflict` (for example `reason=anchor_already_linked`)
 - `identity_link_not_found` (for example `reason=provider_not_linked`)
-- `last_provider_unlink_forbidden` (for example `reason=last_linked_provider`)
+- `last_provider_unlink_forbidden` (for example `reason=last_provider_lockout`)
 - `invalid_state` for malformed callback/dependency-state paths
 
 These codes/reasons are intended for machine handling while preserving non-leaky messages.

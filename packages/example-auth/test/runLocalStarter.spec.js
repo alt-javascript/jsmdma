@@ -203,6 +203,18 @@ describe('run-local starter entrypoint regressions (packages/example-auth)', () 
       assert.equal(callbackReplayBody?.code, 'replay_detected');
       assert.notEqual(callbackReplay.status, 404);
 
+      const lifecycleRoute = await app.request('/auth/login/finalize');
+      assert.equal(lifecycleRoute.status, 400);
+      const lifecycleRouteBody = await lifecycleRoute.json();
+      assert.equal(lifecycleRouteBody?.code, 'bad_request');
+      assert.include(lifecycleRouteBody?.error ?? '', 'Missing required field');
+
+      const unauthMe = await app.request('/auth/me');
+      assert.equal(unauthMe.status, 401);
+      const unauthMeBody = await unauthMe.json();
+      assert.equal(unauthMeBody?.code, 'invalid_state');
+      assert.equal(unauthMeBody?.reason, 'session_required');
+
       const unauthSync = await app.request('/year-planner/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
