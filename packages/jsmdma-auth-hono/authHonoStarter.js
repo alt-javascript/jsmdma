@@ -1,5 +1,11 @@
 /**
- * authHonoStarter.js — CDI registration bundle for the jsmdma auth stack.
+ * authHonoStarter.js — low-level CDI registration bundle for the jsmdma auth stack.
+ *
+ * Canonical composition for auth-enabled jsmdma Hono apps is
+ * `jsmdmaHonoStarter()` from `@alt-javascript/jsmdma-hono`.
+ *
+ * Use `authHonoStarter()` only for advanced/compatibility composition where you
+ * must wire auth infrastructure manually.
  *
  * Usage:
  *   import { authHonoStarter } from '@alt-javascript/jsmdma-auth-hono';
@@ -11,6 +17,15 @@
  *     // sync controllers after auth:
  *     { Reference: AppSyncController, name: 'appSyncController', scope: 'singleton' },
  *   ]);
+ *
+ * Advanced boundary composition:
+ *   import {
+ *     authHonoStarter,
+ *     splitAuthHonoStarterRegistrations,
+ *   } from '@alt-javascript/jsmdma-auth-hono';
+ *
+ *   const { infrastructureRegistrations, legacyControllerRegistrations } =
+ *     splitAuthHonoStarterRegistrations(authHonoStarter());
  *
  * After appCtx.start(), set OAuth provider instances on authController:
  *   appCtx.get('authController').providers = {

@@ -14,6 +14,22 @@ Hono auth adapter for jsmdma — JWT middleware, OAuth routes, and org managemen
 npm install @alt-javascript/jsmdma-auth-hono
 ```
 
+## Composition Guidance
+
+- **Canonical composer:** use `jsmdmaHonoStarter()` from `@alt-javascript/jsmdma-hono` for auth-enabled jsmdma Hono apps.
+- **Low-level composer:** use `authHonoStarter()` from this package only when you need advanced/compatibility wiring control.
+- **Explicit auth boundary API:** use `splitAuthHonoStarterRegistrations()` when you need to separate auth infrastructure registrations from legacy auth controllers while preserving order guarantees.
+
+```js
+import {
+  authHonoStarter,
+  splitAuthHonoStarterRegistrations,
+} from '@alt-javascript/jsmdma-auth-hono';
+
+const { infrastructureRegistrations, legacyControllerRegistrations } =
+  splitAuthHonoStarterRegistrations(authHonoStarter());
+```
+
 ## Exports
 
 | Class | Route(s) | Description |
