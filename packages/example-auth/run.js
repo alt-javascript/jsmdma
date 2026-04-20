@@ -17,10 +17,7 @@
 import '@alt-javascript/jsnosqlc-memory';
 import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
-import { honoStarter } from '@alt-javascript/boot-hono';
-import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
-import { oauthJsnosqlcStarter } from '@alt-javascript/boot-oauth-jsnosqlc';
-import { authHonoStarter } from '@alt-javascript/jsmdma-auth-hono';
+import { jsmdmaHonoStarter } from '@alt-javascript/jsmdma-hono';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
@@ -133,10 +130,12 @@ async function buildContext(providers) {
   });
 
   const context = new Context([
-    ...honoStarter(),
-    ...jsnosqlcAutoConfiguration(),
-    ...oauthJsnosqlcStarter(),
-    ...authHonoStarter(),
+    ...jsmdmaHonoStarter({
+      features: {
+        sync: false,
+        appSyncController: false,
+      },
+    }),
   ]);
 
   const appCtx = new ApplicationContext({ contexts: [context], config });
