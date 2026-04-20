@@ -12,6 +12,8 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RUN_PATH = resolve(__dirname, '../run.js');
+const RUN_LOCAL_PATH = resolve(__dirname, '../run-local.js');
+const README_PATH = resolve(__dirname, '../../../README.md');
 const RUNTIME_PATH = resolve(__dirname, '../runtime/authStarterRuntime.js');
 
 const RUN_JS_JWT_SECRET = 'example-auth-secret-must-be-32-chars!!';
@@ -53,6 +55,35 @@ describe('run.js canonical starter source/runtime contract (packages/example-aut
       assert.notMatch(source, /new\s+Context\s*\(/);
       assert.notMatch(source, /new\s+ApplicationContext\s*\(/);
       assert.notMatch(source, /new\s+EphemeralConfig\s*\(/);
+    });
+
+    it('runtime/docs source surfaces keep split-flow vocabulary and reject legacy callback/logout/link paths', async () => {
+      const [runSource, runLocalSource, readmeSource] = await Promise.all([
+        readFile(RUN_PATH, 'utf8'),
+        readFile(RUN_LOCAL_PATH, 'utf8'),
+        readFile(README_PATH, 'utf8'),
+      ]);
+
+      assert.include(runSource, '/oauth/google/authorize');
+      assert.include(runLocalSource, '/oauth/google/authorize');
+      assert.include(readmeSource, '/oauth/:provider/authorize');
+      assert.include(readmeSource, '/auth/login/finalize');
+      assert.include(readmeSource, '/auth/signout');
+
+      const legacyFragments = [
+        '/auth/:provider/callback',
+        '/auth/logout',
+        '/auth/link/:provider',
+        '/auth/providers/:provider',
+        '/auth/google/callback',
+        '/auth/github/callback',
+      ];
+
+      for (const fragment of legacyFragments) {
+        assert.notInclude(runSource, fragment, `run.js should not contain legacy fragment: ${fragment}`);
+        assert.notInclude(runLocalSource, fragment, `run-local.js should not contain legacy fragment: ${fragment}`);
+        assert.notInclude(readmeSource, fragment, `README.md should not contain legacy fragment: ${fragment}`);
+      }
     });
 
     it('auth starter runtime owns package-base config loading, auth-only oauth defaults, and boot-first startup', async () => {

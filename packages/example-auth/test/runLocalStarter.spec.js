@@ -71,10 +71,20 @@ describe('run-local starter entrypoint regressions (packages/example-auth)', () 
       assert.notMatch(source, /new\s+ApplicationContext\s*\(/);
       assert.notMatch(source, /new\s+EphemeralConfig\s*\(/);
 
-      assert.include(source, "console.log('    GET  /oauth/google/authorize    → boot oauth authorize start (302 + Location/Set-Cookie)');");
-      assert.include(source, "console.log('    GET  /oauth/google/callback     → boot oauth callback consume (typed json envelope)');");
-      assert.include(source, "console.log('    GET  /oauth/github/authorize    → boot oauth github authorize start');");
-      assert.include(source, "console.log('    GET  /oauth/github/callback     → boot oauth github callback consume');");
+      assert.include(source, "console.log('    GET  /oauth/google/authorize    → browser redirect start (302 + Location/Set-Cookie)');");
+      assert.include(source, "console.log('    GET  /oauth/google/callback     → callback consume (typed envelope, replay/malformed aware)');");
+      assert.include(source, "console.log('    GET  /oauth/github/authorize    → browser redirect start (GitHub)');");
+      assert.include(source, "console.log('    GET  /oauth/github/callback     → callback consume (GitHub)');");
+      assert.include(source, "console.log('    POST /auth/login/finalize       → mode-aware login completion (bearer|cookie/session)');");
+      assert.include(source, "console.log('    POST /auth/link/finalize        → link an additional provider');");
+      assert.include(source, "console.log('    DELETE /auth/unlink/:provider   → unlink provider (typed lockout on last provider)');");
+      assert.include(source, "console.log('    POST /auth/signout              → mode-aware signout');");
+
+      assert.notInclude(source, '/auth/google/callback');
+      assert.notInclude(source, '/auth/github/callback');
+      assert.notInclude(source, '/auth/logout');
+      assert.notInclude(source, '/auth/link/:provider');
+      assert.notInclude(source, '/auth/providers/:provider');
     });
 
     it('runtime helper owns boot/config loading and malformed oauth provider guards', async () => {

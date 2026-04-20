@@ -1,20 +1,26 @@
 /**
- * run.js — Mode-aware auth lifecycle walkthrough
+ * run.js — Split-flow oauth + mode-aware auth lifecycle walkthrough
  *
- * Demonstrates the boot-style lifecycle contract:
+ * Demonstrates the canonical split-flow contract:
  *
- *   1. GET /auth/:provider + POST /auth/login/finalize (mode=bearer)
- *   2. GET /auth/me with bearer token
- *   3. POST /auth/link/finalize + DELETE /auth/unlink/:provider
- *   4. POST /auth/signout and stale-session rejection on /auth/me
- *   5. GET /auth/:provider + POST /auth/login/finalize (mode=session alias)
- *   6. GET /auth/me with cookie session + cookie signout invalidation
+ *   1. GET /oauth/:provider/authorize + GET /oauth/:provider/callback
+ *      (success, replay, malformed input, unsupported provider)
+ *   2. GET /auth/:provider + POST /auth/login/finalize (mode=bearer)
+ *   3. GET /auth/me with bearer token
+ *   4. POST /auth/link/finalize + DELETE /auth/unlink/:provider
+ *   5. POST /auth/signout and stale-session rejection on /auth/me
+ *   6. GET /auth/:provider + POST /auth/login/finalize (mode=session alias)
+ *   7. GET /auth/me with cookie session + cookie signout invalidation
  *
  * Run:
  *   node packages/example-auth/run.js
  */
 
-import { buildAuthOnlyStarterApp } from './runtime/authStarterRuntime.js';
+import {
+  AUTH_ONLY_BOOT_OAUTH_GOOGLE_CLIENT_ID,
+  BOOT_OAUTH_GOOGLE_REDIRECT_URI,
+  buildAuthOnlyStarterApp,
+} from './runtime/authStarterRuntime.js';
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
@@ -43,6 +49,11 @@ function print(label, value) {
 
 function encode(value) {
   return encodeURIComponent(value ?? '');
+}
+
+function extractStateFromLocation(location) {
+  const parsed = new URL(location, 'https://oauth.local');
+  return parsed.searchParams.get('state');
 }
 
 async function expectJson(res, label) {
@@ -120,7 +131,7 @@ async function linkFinalize(app, { token, provider, state }) {
 // ── main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  banner('jsmdma — Mode-aware Auth Lifecycle Example');
+  banner('jsmdma — Split-flow oauth + mode-aware auth lifecycle example');
 
   const { app } = await buildAuthOnlyStarterApp({
     jwtSecret: JWT_SECRET,
@@ -132,9 +143,80 @@ async function main() {
 
   console.log('\n  ✓ Boot-first starter context ready (mock providers: github, google)');
 
-  // ── Step 1: login finalize (bearer mode) ───────────────────────────────────
+  // ── Step 1: boot oauth route contract checks ───────────────────────────────
 
-  banner('Step 1: GET /auth/:provider + POST /auth/login/finalize (bearer)');
+  banner('Step 1: /oauth authorize+callback (success, replay, malformed, unsupported)');
+
+  const oauthAuthorizeRes = await app.request('/oauth/google/authorize?mode=cookie');
+  assert(oauthAuthorizeRes.status === 302, `oauth authorize should return 302, got ${oauthAuthorizeRes.status}`);
+
+  const oauthLocation = oauthAuthorizeRes.headers.get('location');
+  assert(typeof oauthLocation === 'string' && oauthLocation.length > 0, 'oauth authorize should return Location header');
+  assert(oauthLocation.includes('state='), 'oauth authorize Location should include state query parameter');
+  assert(oauthLocation.includes(`client_id=${AUTH_ONLY_BOOT_OAUTH_GOOGLE_CLIENT_ID}`), 'oauth authorize should include configured client id');
+  assert(
+    oauthLocation.includes(`redirect_uri=${encodeURIComponent(BOOT_OAUTH_GOOGLE_REDIRECT_URI)}`),
+    'oauth authorize should include configured callback redirect URI',
+  );
+
+  const oauthSetCookie = oauthAuthorizeRes.headers.get('set-cookie');
+  assert(typeof oauthSetCookie === 'string' && oauthSetCookie.toLowerCase().includes('oauth_provider=google'), 'oauth authorize should preserve oauth_provider Set-Cookie');
+
+  const oauthState = extractStateFromLocation(oauthLocation);
+  assert(typeof oauthState === 'string' && oauthState.length > 0, 'oauth authorize should issue non-empty state token');
+
+  await expectTypedError(
+    await app.request('/oauth/google/callback?code=missing-state-code'),
+    {
+      status: 400,
+      code: 'invalid_state',
+      reason: 'non_empty_string_required',
+    },
+    'GET /oauth/google/callback missing state',
+  );
+
+  await expectTypedError(
+    await app.request('/oauth/google/callback?state=missing-code-state'),
+    {
+      status: 400,
+      code: 'invalid_state',
+      reason: 'non_empty_string_required',
+    },
+    'GET /oauth/google/callback missing code',
+  );
+
+  await expectTypedError(
+    await app.request('/oauth/linkedin/authorize'),
+    {
+      status: 400,
+      code: 'invalid_state',
+      reason: 'unsupported_provider',
+    },
+    'GET /oauth/linkedin/authorize',
+  );
+
+  const oauthAcceptedRes = await app.request(`/oauth/google/callback?state=${encode(oauthState)}&code=oauth-code-first`);
+  assert(oauthAcceptedRes.status === 200, `oauth callback first consume should return 200, got ${oauthAcceptedRes.status}`);
+  const oauthAccepted = await expectJson(oauthAcceptedRes, 'GET /oauth/google/callback first consume');
+  assert(oauthAccepted.code === 'oauth_callback_accepted', `oauth callback success should return code=oauth_callback_accepted, got ${oauthAccepted.code}`);
+  assert(oauthAccepted.provider === 'google', `oauth callback success should return provider=google, got ${oauthAccepted.provider}`);
+
+  await expectTypedError(
+    await app.request(`/oauth/google/callback?state=${encode(oauthState)}&code=oauth-code-replay`),
+    {
+      status: 409,
+      code: 'replay_detected',
+      reason: 'replay_detected',
+    },
+    'GET /oauth/google/callback replay',
+  );
+
+  print('oauth state issued:', oauthState.slice(0, 12) + '…');
+  console.log('\n  ✓ Boot oauth authorize/callback contract is deterministic');
+
+  // ── Step 2: login finalize (bearer mode) ───────────────────────────────────
+
+  banner('Step 2: GET /auth/:provider + POST /auth/login/finalize (bearer)');
 
   const beginLogin = await beginAuth(app, 'github');
   const loginBearer = await loginFinalize(app, {
@@ -152,9 +234,9 @@ async function main() {
   print('mode:', loginBearer.mode);
   console.log('\n  ✓ Bearer login finalized');
 
-  // ── Step 2: /auth/me + mode mismatch negative ──────────────────────────────
+  // ── Step 3: /auth/me + mode mismatch negative ──────────────────────────────
 
-  banner('Step 2: GET /auth/me with bearer token + mismatch negative');
+  banner('Step 3: GET /auth/me with bearer token + mismatch negative');
 
   const meBearerRes = await app.request('/auth/me', {
     headers: { Authorization: `Bearer ${loginBearer.token}` },
@@ -177,9 +259,9 @@ async function main() {
   print('/auth/me mode:', meBearer.mode);
   console.log('\n  ✓ Bearer identity confirmed and mode mismatch is typed');
 
-  // ── Step 3: link finalize ───────────────────────────────────────────────────
+  // ── Step 4: link finalize ───────────────────────────────────────────────────
 
-  banner('Step 3: Link second provider via /auth/link/finalize');
+  banner('Step 4: Link second provider via /auth/link/finalize');
 
   const beginLink = await beginAuth(app, 'google', '?link=true');
   const linkResult = await linkFinalize(app, {
@@ -195,9 +277,9 @@ async function main() {
   print('providers after link:', linkedProviders);
   console.log('\n  ✓ Link finalize succeeded with deterministic projection');
 
-  // ── Step 4: unlink + lockout guard ─────────────────────────────────────────
+  // ── Step 5: unlink + lockout guard ─────────────────────────────────────────
 
-  banner('Step 4: DELETE /auth/unlink/:provider + last-provider lockout reason');
+  banner('Step 5: DELETE /auth/unlink/:provider + last-provider lockout reason');
 
   const unlinkGithubRes = await app.request('/auth/unlink/github', {
     method: 'DELETE',
@@ -222,9 +304,9 @@ async function main() {
   print('remaining providers:', remaining);
   console.log('\n  ✓ Unlink and last-provider lockout typed reason verified');
 
-  // ── Step 5: bearer signout + stale-session rejection ───────────────────────
+  // ── Step 6: bearer signout + stale-session rejection ───────────────────────
 
-  banner('Step 5: POST /auth/signout (bearer) + stale /auth/me token');
+  banner('Step 6: POST /auth/signout (bearer) + stale /auth/me token');
 
   const signoutBearerRes = await app.request('/auth/signout', {
     method: 'POST',
@@ -245,9 +327,9 @@ async function main() {
 
   console.log('\n  ✓ Signout invalidates bearer session token deterministically');
 
-  // ── Step 6: cookie mode alias + cookie signout invalidation ────────────────
+  // ── Step 7: cookie mode alias + cookie signout invalidation ────────────────
 
-  banner('Step 6: login finalize mode=session alias + cookie session lifecycle');
+  banner('Step 7: login finalize mode=session alias + cookie session lifecycle');
 
   const beginCookieLogin = await beginAuth(app, 'github');
   const loginCookie = await loginFinalize(app, {
@@ -310,12 +392,13 @@ async function main() {
   // ── Summary ─────────────────────────────────────────────────────────────────
 
   banner('Result');
-  console.log('\n  ✓ login finalize (bearer) → /auth/me (bearer)');
+  console.log('\n  ✓ /oauth authorize+callback success, malformed guards, and replay detection');
+  console.log('  ✓ login finalize (bearer) → /auth/me (bearer)');
   console.log('  ✓ link finalize → unlink with typed last_provider_lockout guard');
-  console.log('  ✓ signout rejects stale bearer session with session_not_found');
+  console.log('  ✓ signout rejects stale bearer/cookie sessions with session_not_found');
   console.log('  ✓ mode=session alias normalizes to cookie and works end-to-end');
   console.log('  ✓ replay and mode mismatch return deterministic typed reasons');
-  console.log('\n  All assertions passed. Mode-aware auth lifecycle is working correctly.\n');
+  console.log('\n  All assertions passed. Split-flow oauth and auth lifecycle are working correctly.\n');
 }
 
 main().catch((err) => {

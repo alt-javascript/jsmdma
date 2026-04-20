@@ -325,22 +325,24 @@ node packages/example-auth/run.js
 
 ## Auth API
 
-### Endpoints
+### Endpoints (split-flow topology)
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `GET` | `/auth/:provider` | — | Begin OAuth flow. |
-| `GET` | `/auth/:provider/callback` | — | Complete OAuth flow. Returns `{ user, token }`. |
-| `GET` | `/auth/me` | ✅ | Current user identity from JWT. |
-| `POST` | `/auth/logout` | — | Stateless logout guidance. |
-| `POST` | `/auth/link/:provider` | ✅ | Link a second OAuth provider. |
-| `DELETE` | `/auth/providers/:provider` | ✅ | Remove a provider. Returns `409` if it would be the last. |
+| `GET` | `/oauth/:provider/authorize` | — | Browser redirect start. Returns `302` with `Location`/`Set-Cookie`. |
+| `GET` | `/oauth/:provider/callback` | — | Callback consume with typed envelopes (`oauth_callback_accepted`, `invalid_state`, `replay_detected`). |
+| `GET` | `/auth/:provider` | — | Transaction start JSON (`{ authorizationURL, state }`) for client-driven finalize flows. |
+| `POST` | `/auth/login/finalize` | — | Complete login from `{ provider, state, code }`; mode-aware (`bearer`, `cookie`, `session` alias). |
+| `GET` | `/auth/me` | ✅ | Current user/session projection; typed mode/session mismatch reasons when applicable. |
+| `POST` | `/auth/link/finalize` | ✅ | Link a second provider with typed lifecycle envelopes. |
+| `DELETE` | `/auth/unlink/:provider` | ✅ | Remove a provider. Returns typed `last_provider_lockout` on final-provider attempts. |
+| `POST` | `/auth/signout` | ✅ | Mode-aware signout and stale-session invalidation. |
 
 **Supported providers:** `google`, `github`, `microsoft`, `apple`
 
 ### JWT Session
 
-Sessions are stateless HS256 JWTs. Idle TTL: 3 days. Hard TTL: 7 days. Rolling refresh via `X-Auth-Token` response header when idle for more than 1 hour.
+Sessions are stateless HS256 JWTs (bearer or cookie/session mode). Idle TTL: 3 days. Hard TTL: 7 days. Rolling refresh via `X-Auth-Token` response header when idle for more than 1 hour.
 
 ---
 
