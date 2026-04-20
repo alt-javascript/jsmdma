@@ -1,153 +1,163 @@
 /**
- * UserRepository.js — jsnosqlc-backed user identity store.
+ * UserRepository.js — jsnosqlc-backed user profile store.
  *
- * Two collections:
+ * User records remain the profile source of truth:
+ *   key = userId (UUID)
+ *   { userId, email, providers: [{ provider, providerUserId }], createdAt, updatedAt }
  *
- *   users:
- *     key = userId (UUID)
- *     { userId, email, providers: [{ provider, providerUserId }], createdAt, updatedAt }
- *
- *   providerIndex:
- *     key = '{provider}:{providerUserId}'
- *     { userId, provider, providerUserId }
- *
- * The providerIndex is a lookup table: given a provider + providerUserId,
- * find the application userId (UUID) without scanning all users.
- *
- * nosqlClient injected directly (tests) or CDI-autowired (production).
+ * Provider ownership is resolved by oauthIdentityLinkStore. The providers array
+ * here is projection state that should be synchronized from store reads.
  */
-const USERS_COL    = 'users';
-const PROVIDER_COL = 'providerIndex';
+const USERS_COL = 'users';
+
+function hasNonEmptyString(value) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function assertUserId(userId, operation) {
+  if (!hasNonEmptyString(userId)) {
+    throw new TypeError(`UserRepository.${operation} requires a non-empty userId string.`);
+  }
+  return userId;
+}
+
+function normalizeProviderProjectionEntry(entry, index, operation) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    throw new TypeError(`UserRepository.${operation} provider entry at index ${index} must be an object.`);
+  }
+
+  const provider = hasNonEmptyString(entry.provider) ? entry.provider.trim() : null;
+  const providerUserId = hasNonEmptyString(entry.providerUserId) ? entry.providerUserId.trim() : null;
+
+  if (!provider || !providerUserId) {
+    throw new TypeError(`UserRepository.${operation} provider entry at index ${index} must include provider and providerUserId.`);
+  }
+
+  return { provider, providerUserId };
+}
+
+function normalizeProvidersProjection(providers, operation) {
+  if (providers == null) return [];
+  if (!Array.isArray(providers)) {
+    throw new TypeError(`UserRepository.${operation} providers must be an array.`);
+  }
+
+  const normalized = providers.map((entry, index) => (
+    normalizeProviderProjectionEntry(entry, index, operation)
+  ));
+
+  const seenProviders = new Set();
+  for (const entry of normalized) {
+    if (seenProviders.has(entry.provider)) {
+      throw new TypeError(`UserRepository.${operation} providers must not contain duplicate provider values.`);
+    }
+    seenProviders.add(entry.provider);
+  }
+
+  return normalized;
+}
 
 export default class UserRepository {
   constructor(nosqlClient, logger) {
     this.nosqlClient = nosqlClient;
-    this.logger      = logger ?? null;
+    this.logger = logger ?? null;
   }
 
-  _users()    { return this.nosqlClient.getCollection(USERS_COL);    }
-  _providers() { return this.nosqlClient.getCollection(PROVIDER_COL); }
-
-  /**
-   * Find a user by OAuth provider + providerUserId.
-   * @param {string} provider
-   * @param {string} providerUserId
-   * @returns {Promise<Object|null>}
-   */
-  async findByProvider(provider, providerUserId) {
-    const indexKey = `${provider}:${providerUserId}`;
-    const entry    = await this._providers().get(indexKey);
-    if (!entry) return null;
-    return this._users().get(entry.userId);
+  _users() {
+    return this.nosqlClient.getCollection(USERS_COL);
   }
 
   /**
-   * Create a new user with their first provider.
+   * Create a new user profile document.
    * @param {string} userId
    * @param {string|null} email
-   * @param {string} provider
-   * @param {string} providerUserId
+   * @param {Array<{provider:string,providerUserId:string}>} providers
    * @returns {Promise<Object>} created user
    */
-  async create(userId, email, provider, providerUserId) {
-    const now  = new Date().toISOString();
+  async create(userId, email, providers = []) {
+    const normalizedUserId = assertUserId(userId, 'create');
+    const normalizedProviders = normalizeProvidersProjection(providers, 'create');
+    const now = new Date().toISOString();
+
     const user = {
-      userId,
-      email:     email ?? null,
-      providers: [{ provider, providerUserId }],
+      userId: normalizedUserId,
+      email: hasNonEmptyString(email) ? email.trim() : null,
+      providers: normalizedProviders,
       createdAt: now,
       updatedAt: now,
     };
 
-    const indexKey = `${provider}:${providerUserId}`;
-    await this._providers().store(indexKey, { userId, provider, providerUserId });
-    await this._users().store(userId, user);
+    await this._users().store(normalizedUserId, user);
+    this.logger?.info?.(`[UserRepository] create userId=${normalizedUserId}`);
 
-    this.logger?.info?.(`[UserRepository] create userId=${userId} provider=${provider}`);
     return user;
   }
 
   /**
-   * Add a new provider to an existing user's identity.
+   * Synchronize the projected providers array from oauth identity-link store data.
    * @param {string} userId
-   * @param {string} provider
-   * @param {string} providerUserId
+   * @param {Array<{provider:string,providerUserId:string}>} providers
    * @returns {Promise<Object>} updated user
    */
-  async addProvider(userId, provider, providerUserId) {
-    const existing = await this._users().get(userId);
-    if (!existing) throw new Error(`User not found: ${userId}`);
+  async syncProvidersProjection(userId, providers) {
+    const normalizedUserId = assertUserId(userId, 'syncProvidersProjection');
+    const existing = await this._users().get(normalizedUserId);
+    if (!existing) throw new Error(`User not found: ${normalizedUserId}`);
 
-    const updatedProviders = [...existing.providers, { provider, providerUserId }];
-    const updated = { ...existing, providers: updatedProviders, updatedAt: new Date().toISOString() };
+    const normalizedProviders = normalizeProvidersProjection(providers, 'syncProvidersProjection');
+    const updated = {
+      ...existing,
+      providers: normalizedProviders,
+      updatedAt: new Date().toISOString(),
+    };
 
-    const indexKey = `${provider}:${providerUserId}`;
-    await this._providers().store(indexKey, { userId, provider, providerUserId });
-    await this._users().store(userId, updated);
+    await this._users().store(normalizedUserId, updated);
+    this.logger?.debug?.(`[UserRepository] syncProvidersProjection userId=${normalizedUserId} providers=${normalizedProviders.length}`);
 
-    this.logger?.info?.(`[UserRepository] addProvider userId=${userId} provider=${provider}`);
     return updated;
   }
 
   /**
    * Update a user's email address.
-   * Used when Apple (or another provider) sends email only on first login.
+   * Used when a provider supplies email only on initial login.
    * @param {string} userId
    * @param {string} email
    * @returns {Promise<Object>} updated user
    */
   async updateEmail(userId, email) {
-    const existing = await this._users().get(userId);
-    if (!existing) throw new Error(`User not found: ${userId}`);
+    const normalizedUserId = assertUserId(userId, 'updateEmail');
+    if (!hasNonEmptyString(email)) {
+      throw new TypeError('UserRepository.updateEmail requires a non-empty email string.');
+    }
 
-    const updated = { ...existing, email, updatedAt: new Date().toISOString() };
-    await this._users().store(userId, updated);
+    const existing = await this._users().get(normalizedUserId);
+    if (!existing) throw new Error(`User not found: ${normalizedUserId}`);
 
-    this.logger?.debug?.(`[UserRepository] updateEmail userId=${userId}`);
+    const updated = {
+      ...existing,
+      email: email.trim(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    await this._users().store(normalizedUserId, updated);
+    this.logger?.debug?.(`[UserRepository] updateEmail userId=${normalizedUserId}`);
+
     return updated;
   }
 
   /**
-   * Remove a provider from a user's identity.
-   * Caller must ensure the user has at least 2 providers before calling.
-   * @param {string} userId
-   * @param {string} provider
-   * @returns {Promise<Object>} updated user
-   */
-  async removeProvider(userId, provider) {
-    const existing = await this._users().get(userId);
-    if (!existing) throw new Error(`User not found: ${userId}`);
-
-    const entry = existing.providers.find((p) => p.provider === provider);
-    if (!entry) throw new Error(`Provider ${provider} not found on user ${userId}`);
-
-    // Remove from providerIndex
-    const indexKey = `${provider}:${entry.providerUserId}`;
-    await this._providers().delete(indexKey);
-
-    const updatedProviders = existing.providers.filter((p) => p.provider !== provider);
-    const updated = { ...existing, providers: updatedProviders, updatedAt: new Date().toISOString() };
-    await this._users().store(userId, updated);
-
-    this.logger?.info?.(`[UserRepository] removeProvider userId=${userId} provider=${provider}`);
-    return updated;
-  }
-
-  /**
-   * Hard-delete a user, removing their user record and all provider index entries.
-   * Idempotent — no-op if user does not exist.
-   *
+   * Hard-delete a user profile.
+   * Idempotent — no-op when user does not exist.
    * @param {string} userId
    * @returns {Promise<void>}
    */
   async deleteUser(userId) {
-    const user = await this._users().get(userId);
-    if (user == null) return; // idempotent
-    for (const p of user.providers) {
-      await this._providers().delete(`${p.provider}:${p.providerUserId}`);
-    }
-    await this._users().delete(userId);
-    this.logger?.info?.(`[UserRepository] deleteUser userId=${userId}`);
+    const normalizedUserId = assertUserId(userId, 'deleteUser');
+    const user = await this._users().get(normalizedUserId);
+    if (user == null) return;
+
+    await this._users().delete(normalizedUserId);
+    this.logger?.info?.(`[UserRepository] deleteUser userId=${normalizedUserId}`);
   }
 
   /**
@@ -156,6 +166,7 @@ export default class UserRepository {
    * @returns {Promise<Object|null>}
    */
   async getUser(userId) {
-    return this._users().get(userId) ?? null;
+    const normalizedUserId = assertUserId(userId, 'getUser');
+    return this._users().get(normalizedUserId) ?? null;
   }
 }
