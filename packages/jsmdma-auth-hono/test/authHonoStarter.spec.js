@@ -9,6 +9,7 @@
  */
 import { assert } from 'chai';
 import '@alt-javascript/jsnosqlc-memory';
+import './registerBootWorkspaceMemoryDriver.js';
 import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
 import { honoStarter } from '@alt-javascript/boot-hono';

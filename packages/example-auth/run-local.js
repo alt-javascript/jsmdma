@@ -17,8 +17,9 @@
  *   SPA_ORIGIN            — origin of the SPA (default: http://localhost:8080)
  *
  * Google Cloud Console setup:
- *   Authorised redirect URIs must include:
+ *   Authorised redirect URIs should include both legacy and boot-oauth callbacks:
  *     http://127.0.0.1:8081/auth/google/callback
+ *     http://127.0.0.1:8081/oauth/google/callback
  *   Authorised JavaScript origins must include:
  *     http://localhost:8080
  *     http://127.0.0.1:8080
@@ -80,6 +81,8 @@ if (JWT_SECRET.length < 32) {
 
 const GOOGLE_REDIRECT_URI  = 'http://127.0.0.1:8081/auth/google/callback';
 const GITHUB_REDIRECT_URI  = 'http://127.0.0.1:8081/auth/github/callback';
+const BOOT_OAUTH_GOOGLE_REDIRECT_URI = 'http://127.0.0.1:8081/oauth/google/callback';
+const BOOT_OAUTH_GITHUB_REDIRECT_URI = 'http://127.0.0.1:8081/oauth/github/callback';
 const SPA_ORIGIN   = process.env.SPA_ORIGIN || 'http://localhost:8080';
 
 const PLANNER_SCHEMA_PATH = fileURLToPath(new URL('../example/schemas/planner.json', import.meta.url));
@@ -103,10 +106,23 @@ const APPLICATIONS_CONFIG = {
   },
 };
 
+const BOOT_OAUTH_PROVIDER_CONFIG = {
+  providers: {
+    google: {
+      clientId: GOOGLE_CLIENT_ID,
+      redirectUri: BOOT_OAUTH_GOOGLE_REDIRECT_URI,
+    },
+    github: {
+      clientId: GITHUB_CLIENT_ID,
+      redirectUri: BOOT_OAUTH_GITHUB_REDIRECT_URI,
+    },
+  },
+};
+
 // ── CDI context ───────────────────────────────────────────────────────────────
 
 const config = new EphemeralConfig({
-  'boot':         { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
+  'boot':         { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' }, oauth: BOOT_OAUTH_PROVIDER_CONFIG },
   'logging':      { format: 'text', level: { ROOT: 'debug' } },
   'server':       { port: 8081, host: '127.0.0.1' },
   'auth':         { jwt: { secret: JWT_SECRET } },
@@ -152,12 +168,16 @@ async function main() {
   console.log('\n  jsmdma local POC server running on http://127.0.0.1:8081');
   console.log('  Routes:');
   console.log('    GET  /health');
-  console.log('    GET  /auth/google              → begin OAuth (returns authorizationURL JSON)');
-  console.log('    GET  /auth/google/callback     → complete OAuth (returns { user, token })');
-  console.log('    GET  /auth/github              → begin GitHub OAuth');
-  console.log('    GET  /auth/github/callback     → complete GitHub OAuth');
-  console.log('    GET  /auth/me                  → current user (requires JWT)');
-  console.log('    POST /year-planner/sync        → HLC sync (requires JWT)');
+  console.log('    GET  /oauth/google/authorize    → boot oauth authorize start (302 + Location/Set-Cookie)');
+  console.log('    GET  /oauth/google/callback     → boot oauth callback consume (typed json envelope)');
+  console.log('    GET  /oauth/github/authorize    → boot oauth github authorize start');
+  console.log('    GET  /oauth/github/callback     → boot oauth github callback consume');
+  console.log('    GET  /auth/google               → begin OAuth (returns authorizationURL JSON)');
+  console.log('    GET  /auth/google/callback      → complete OAuth (returns { user, token })');
+  console.log('    GET  /auth/github               → begin GitHub OAuth');
+  console.log('    GET  /auth/github/callback      → complete GitHub OAuth');
+  console.log('    GET  /auth/me                   → current user (requires JWT)');
+  console.log('    POST /year-planner/sync         → HLC sync (requires JWT)');
   console.log('  Auth: jsmdma JWT (issued after Google or GitHub OAuth redirect flow)');
   console.log('  Storage: in-memory (data lost on restart)');
   console.log('\n  Start the SPA: npx http-server site/ -p 8080 (in year-planner repo)');
