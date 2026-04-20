@@ -85,6 +85,8 @@ describe('run-local starter entrypoint regressions (packages/example-auth)', () 
       assert.include(source, 'AUTH_STARTER_PACKAGE_BASE_PATH');
       assert.include(source, 'RUN_LOCAL_STARTER_OPTIONS');
       assert.include(source, 'CorsMiddlewareRegistrar');
+      assert.include(source, 'createAuthOnlyBootOauthProviderConfig');
+      assert.include(source, 'createAuthOnlyConfigOverrides');
       assert.include(source, 'assertBootOauthProviderConfig');
       assert.include(source, 'Malformed oauth provider config');
       assert.include(source, 'buildRunLocalStarterContext');

@@ -20,6 +20,9 @@ export const AUTH_GITHUB_REDIRECT_URI = 'http://127.0.0.1:8081/auth/github/callb
 export const BOOT_OAUTH_GOOGLE_REDIRECT_URI = 'http://127.0.0.1:8081/oauth/google/callback';
 export const BOOT_OAUTH_GITHUB_REDIRECT_URI = 'http://127.0.0.1:8081/oauth/github/callback';
 
+export const AUTH_ONLY_BOOT_OAUTH_GOOGLE_CLIENT_ID = 'example-auth-only-google-client-id';
+export const AUTH_ONLY_BOOT_OAUTH_GITHUB_CLIENT_ID = 'example-auth-only-github-client-id';
+
 export const AUTH_PLANNER_SCHEMA_PATH = fileURLToPath(new URL('../../example/schemas/planner.json', import.meta.url));
 export const AUTH_APP_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../../example/schemas/planner-preferences.json', import.meta.url));
 export const AUTH_GENERIC_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../../jsmdma-server/schemas/preferences.json', import.meta.url));
@@ -200,11 +203,48 @@ export function loadAuthStarterConfig({
   });
 }
 
+export function createAuthOnlyBootOauthProviderConfig({
+  googleClientId = AUTH_ONLY_BOOT_OAUTH_GOOGLE_CLIENT_ID,
+  githubClientId = AUTH_ONLY_BOOT_OAUTH_GITHUB_CLIENT_ID,
+  googleRedirectUri = BOOT_OAUTH_GOOGLE_REDIRECT_URI,
+  githubRedirectUri = BOOT_OAUTH_GITHUB_REDIRECT_URI,
+} = {}) {
+  const bootOauthConfig = {
+    providers: {
+      google: {
+        clientId: googleClientId,
+        redirectUri: googleRedirectUri,
+      },
+      github: {
+        clientId: githubClientId,
+        redirectUri: githubRedirectUri,
+      },
+    },
+  };
+
+  assertBootOauthProviderConfig(bootOauthConfig);
+
+  return bootOauthConfig;
+}
+
 export function createAuthOnlyConfigOverrides({
   jwtSecret = AUTH_DEFAULT_JWT_SECRET,
+  googleClientId = AUTH_ONLY_BOOT_OAUTH_GOOGLE_CLIENT_ID,
+  githubClientId = AUTH_ONLY_BOOT_OAUTH_GITHUB_CLIENT_ID,
+  bootOauth,
 } = {}) {
+  const bootOauthConfig = bootOauth ?? createAuthOnlyBootOauthProviderConfig({
+    googleClientId,
+    githubClientId,
+  });
+
+  assertBootOauthProviderConfig(bootOauthConfig);
+
   return {
     auth: { jwt: { secret: jwtSecret } },
+    boot: {
+      oauth: bootOauthConfig,
+    },
   };
 }
 
@@ -212,18 +252,10 @@ export function createRunLocalBootOauthProviderConfig({
   googleClientId,
   githubClientId,
 } = {}) {
-  const bootOauthConfig = {
-    providers: {
-      google: {
-        clientId: googleClientId,
-        redirectUri: BOOT_OAUTH_GOOGLE_REDIRECT_URI,
-      },
-      github: {
-        clientId: githubClientId,
-        redirectUri: BOOT_OAUTH_GITHUB_REDIRECT_URI,
-      },
-    },
-  };
+  const bootOauthConfig = createAuthOnlyBootOauthProviderConfig({
+    googleClientId,
+    githubClientId,
+  });
 
   assertBootOauthProviderConfig(bootOauthConfig);
 
@@ -300,6 +332,9 @@ export async function buildAuthStarterContext({
 
 export async function buildAuthOnlyStarterContext({
   jwtSecret = AUTH_DEFAULT_JWT_SECRET,
+  googleClientId = AUTH_ONLY_BOOT_OAUTH_GOOGLE_CLIENT_ID,
+  githubClientId = AUTH_ONLY_BOOT_OAUTH_GITHUB_CLIENT_ID,
+  bootOauth,
   providers = {},
   starterOptions = {},
   run = false,
@@ -308,7 +343,12 @@ export async function buildAuthOnlyStarterContext({
   const appCtx = await buildAuthStarterContext({
     run,
     basePath,
-    configOverrides: createAuthOnlyConfigOverrides({ jwtSecret }),
+    configOverrides: createAuthOnlyConfigOverrides({
+      jwtSecret,
+      googleClientId,
+      githubClientId,
+      bootOauth,
+    }),
     starterOptions: createAuthOnlyStarterOptions(starterOptions),
   });
 
