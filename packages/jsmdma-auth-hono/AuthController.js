@@ -18,10 +18,11 @@
  * request.honoCtx.get('user').
  *
  * CDI autowires:
- *   this.authService     — AuthService instance
- *   this.userRepository  — UserRepository instance (for link/unlink)
- *   this.providers       — { [providerName]: providerInstance } map
- *   this.logger          — optional logger
+ *   this.authService            — AuthService instance
+ *   this.userRepository         — UserRepository instance (profile projection sync)
+ *   this.oauthIdentityLinkStore — provider-anchor ownership authority
+ *   this.providers              — { [providerName]: providerInstance } map
+ *   this.logger                 — optional logger
  */
 const ERROR_CODE_BY_STATUS = Object.freeze({
   400: 'bad_request',
@@ -30,7 +31,32 @@ const ERROR_CODE_BY_STATUS = Object.freeze({
   404: 'not_found',
   409: 'conflict',
   500: 'internal_error',
+  503: 'service_unavailable',
 });
+
+const REQUEST_VALIDATION_REASONS = new Set([
+  'non_empty_string_required',
+  'invalid_operation_shape',
+  'unsupported_provider',
+  'unknown_state',
+  'state_mismatch',
+  'malformed_provider_callback',
+]);
+
+const STATUS_BY_OAUTH_CODE = Object.freeze({
+  identity_link_conflict: 409,
+  last_provider_unlink_forbidden: 409,
+  identity_link_not_found: 404,
+  invalid_state: 500,
+  internal_error: 500,
+});
+
+function firstDefined(...values) {
+  for (const value of values) {
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
 
 function errorCodeForStatus(statusCode) {
   if (ERROR_CODE_BY_STATUS[statusCode]) {
@@ -42,11 +68,25 @@ function errorCodeForStatus(statusCode) {
 }
 
 function failure(statusCode, error, extras = {}) {
+  const base = {
+    error,
+    code: errorCodeForStatus(statusCode),
+  };
+
+  if (statusCode >= 500) {
+    return {
+      statusCode,
+      body: {
+        ...base,
+        ...(extras.code ? { code: extras.code } : {}),
+      },
+    };
+  }
+
   return {
     statusCode,
     body: {
-      error,
-      code: errorCodeForStatus(statusCode),
+      ...base,
       ...extras,
     },
   };
@@ -58,6 +98,153 @@ function hasNonEmptyString(value) {
 
 function isPlainObject(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function oauthCodeFromError(err) {
+  const value = firstDefined(err?.code, err?.errorCode);
+  return hasNonEmptyString(value) ? value.trim() : null;
+}
+
+function oauthReasonFromError(err) {
+  const value = firstDefined(err?.reason, err?.diagnostics?.reason);
+  return hasNonEmptyString(value) ? value.trim() : null;
+}
+
+function oauthDetailsFromError(err) {
+  return firstDefined(err?.details, err?.diagnostics);
+}
+
+function createTypedOauthError({
+  message,
+  code = 'invalid_state',
+  reason = 'malformed_dependency_response',
+  status = 500,
+  details,
+  cause,
+}) {
+  const err = new Error(message);
+  err.name = 'OAuthIdentityError';
+  err.code = code;
+  err.reason = reason;
+  err.status = status;
+  err.diagnostics = details ?? { reason };
+
+  if (details !== undefined) {
+    err.details = details;
+  }
+
+  if (cause !== undefined) {
+    err.cause = cause;
+  }
+
+  return err;
+}
+
+function normalizeProjectionLinks(links, operation) {
+  if (!Array.isArray(links)) {
+    throw createTypedOauthError({
+      message: `OAuth identity store ${operation} returned malformed links payload.`,
+      details: { operation },
+    });
+  }
+
+  const normalized = links.map((entry, index) => {
+    if (!isPlainObject(entry)) {
+      throw createTypedOauthError({
+        message: `OAuth identity store ${operation} returned malformed link entry at index ${index}.`,
+        details: { operation, index },
+      });
+    }
+
+    const provider = hasNonEmptyString(entry.provider) ? entry.provider.trim() : null;
+    const providerUserId = hasNonEmptyString(entry.providerUserId) ? entry.providerUserId.trim() : null;
+
+    if (!provider || !providerUserId) {
+      throw createTypedOauthError({
+        message: `OAuth identity store ${operation} returned incomplete link entry at index ${index}.`,
+        details: { operation, index },
+      });
+    }
+
+    return { provider, providerUserId };
+  });
+
+  const seenProviders = new Set();
+  for (const entry of normalized) {
+    if (seenProviders.has(entry.provider)) {
+      throw createTypedOauthError({
+        message: 'OAuth identity store returned duplicate provider entries for a user.',
+        reason: 'invalid_projection_state',
+        details: { operation },
+      });
+    }
+    seenProviders.add(entry.provider);
+  }
+
+  return normalized;
+}
+
+function inferStatusForOauthError(err, code, reason) {
+  if (Number.isInteger(err?.status)) return err.status;
+  if (Number.isInteger(err?.statusCode)) return err.statusCode;
+
+  if (reason === 'dependency_timeout') return 503;
+  if (REQUEST_VALIDATION_REASONS.has(reason)) return 400;
+
+  if (code && STATUS_BY_OAUTH_CODE[code]) {
+    return STATUS_BY_OAUTH_CODE[code];
+  }
+
+  return 500;
+}
+
+function errorMessageForOauthFailure({ status, code, fallbackMessage }) {
+  if (status >= 500) return fallbackMessage;
+
+  if (code === 'identity_link_conflict') {
+    return 'This provider account is already linked to another user';
+  }
+
+  if (code === 'last_provider_unlink_forbidden') {
+    return 'Cannot remove last provider — you would be locked out';
+  }
+
+  if (code === 'identity_link_not_found') {
+    return 'Provider is not linked to this user';
+  }
+
+  return fallbackMessage;
+}
+
+function oauthFailure(err, { fallbackMessage }) {
+  const code = oauthCodeFromError(err);
+  const reason = oauthReasonFromError(err);
+
+  const rawDetails = oauthDetailsFromError(err);
+  if (rawDetails !== undefined && !isPlainObject(rawDetails)) {
+    return failure(500, fallbackMessage, {
+      code: 'invalid_state',
+    });
+  }
+
+  const status = inferStatusForOauthError(err, code, reason);
+  const extras = {};
+
+  if (hasNonEmptyString(code)) {
+    extras.code = code;
+  }
+
+  if (status < 500 && reason !== null) {
+    extras.reason = reason;
+  }
+
+  if (status < 500 && rawDetails !== undefined) {
+    extras.details = rawDetails;
+  }
+
+  const error = errorMessageForOauthFailure({ status, code, fallbackMessage });
+
+  return failure(status, error, extras);
 }
 
 export default class AuthController {
@@ -73,17 +260,65 @@ export default class AuthController {
   ];
 
   constructor() {
-    this.authService    = null; // CDI autowired
+    this.authService = null; // CDI autowired
     this.userRepository = null; // CDI autowired
-    this.providers      = {};   // set directly or by authHonoStarter()
-    this.logger         = null; // CDI autowired
-    this.spaOrigin      = null; // set at runtime (e.g. 'http://localhost:8080')
+    this.oauthIdentityLinkStore = null; // CDI autowired
+    this.providers = {}; // set directly or by authHonoStarter()
+    this.logger = null; // CDI autowired
+    this.spaOrigin = null; // set at runtime (e.g. 'http://localhost:8080')
   }
 
   // ── auth helpers ───────────────────────────────────────────────────────────
 
   _getUser(request) {
     return request.honoCtx?.get('user') ?? null;
+  }
+
+  _requireIdentityStore() {
+    const store = this.oauthIdentityLinkStore;
+    if (
+      !store
+      || typeof store.link !== 'function'
+      || typeof store.unlink !== 'function'
+      || typeof store.getLinksForUser !== 'function'
+    ) {
+      this.logger?.error?.('[AuthController] oauthIdentityLinkStore dependency is not configured correctly.');
+      return null;
+    }
+    return store;
+  }
+
+  async _readLinksFromStore(store, userId, operation) {
+    let links;
+
+    try {
+      links = await store.getLinksForUser(userId);
+    } catch (err) {
+      if (hasNonEmptyString(oauthCodeFromError(err))) {
+        throw err;
+      }
+
+      const message = hasNonEmptyString(err?.message) ? err.message : String(err ?? 'Unknown error');
+      const timeoutLike = /timeout/i.test(message) || err?.code === 'ETIMEDOUT';
+      throw createTypedOauthError({
+        message: `OAuth identity store ${operation} failed: ${message}`,
+        reason: timeoutLike ? 'dependency_timeout' : 'malformed_dependency_response',
+        details: { operation },
+        status: timeoutLike ? 503 : 500,
+        cause: err,
+      });
+    }
+
+    return normalizeProjectionLinks(links, operation);
+  }
+
+  async _syncProvidersProjection(userId, links) {
+    try {
+      return await this.userRepository.syncProvidersProjection(userId, links);
+    } catch (err) {
+      this.logger?.error?.(`[AuthController] syncProvidersProjection failed userId=${userId}: ${err?.message ?? err}`);
+      return null;
+    }
   }
 
   // ── route handlers ─────────────────────────────────────────────────────────
@@ -96,8 +331,8 @@ export default class AuthController {
     const user = this._getUser(request);
     if (!user) return failure(401, 'Unauthorized');
     return {
-      userId:    user.sub,
-      email:     user.email ?? null,
+      userId: user.sub,
+      email: user.email ?? null,
       providers: user.providers ?? [],
     };
   }
@@ -124,13 +359,19 @@ export default class AuthController {
     const instance = this.providers[provider];
     if (!instance) return failure(400, `Unknown provider: ${provider}`);
 
+    const store = this._requireIdentityStore();
+    if (!store) return failure(500, 'Provider link failed');
+
     const { code, state, stored_state: storedState, code_verifier: codeVerifier } = request.query;
     if (!code || !state || !storedState) {
       return failure(400, 'Missing required query params: code, state, stored_state');
     }
 
     if (state !== storedState) {
-      return failure(400, 'OAuth state mismatch');
+      return failure(400, 'OAuth state mismatch', {
+        code: 'invalid_state',
+        reason: 'state_mismatch',
+      });
     }
 
     let callbackResult;
@@ -143,29 +384,35 @@ export default class AuthController {
 
     if (!isPlainObject(callbackResult) || !hasNonEmptyString(callbackResult.providerUserId)) {
       this.logger?.error?.(`[AuthController] linkProvider callback returned malformed payload for provider=${provider}`);
-      return failure(500, 'Provider callback failed');
+      return failure(400, 'Provider callback failed', {
+        code: 'invalid_state',
+        reason: 'malformed_provider_callback',
+      });
     }
 
-    const { providerUserId } = callbackResult;
+    const providerUserId = callbackResult.providerUserId.trim();
 
-    let existingUser;
     try {
-      existingUser = await this.userRepository.findByProvider(provider, providerUserId);
+      await store.link({
+        userId: user.sub,
+        provider,
+        providerUserId,
+      });
     } catch (err) {
-      this.logger?.error?.(`[AuthController] linkProvider findByProvider failed: ${err?.message ?? err}`);
-      return failure(500, 'Provider link failed');
+      this.logger?.warn?.(`[AuthController] linkProvider store.link failed userId=${user.sub} provider=${provider}: ${err?.message ?? err}`);
+      return oauthFailure(err, { fallbackMessage: 'Provider link failed' });
     }
 
-    // Check if this providerUserId is already linked to any user
-    if (existingUser) {
-      return failure(409, 'This provider account is already linked to another user');
-    }
-
-    let updatedUser;
+    let links;
     try {
-      updatedUser = await this.userRepository.addProvider(user.sub, provider, providerUserId);
+      links = await this._readLinksFromStore(store, user.sub, 'getLinksForUser');
     } catch (err) {
-      this.logger?.error?.(`[AuthController] linkProvider addProvider failed: ${err?.message ?? err}`);
+      this.logger?.warn?.(`[AuthController] linkProvider getLinksForUser failed userId=${user.sub}: ${err?.message ?? err}`);
+      return oauthFailure(err, { fallbackMessage: 'Provider link failed' });
+    }
+
+    const updatedUser = await this._syncProvidersProjection(user.sub, links);
+    if (!updatedUser) {
       return failure(500, 'Provider link failed');
     }
 
@@ -183,15 +430,58 @@ export default class AuthController {
     if (!user) return failure(401, 'Unauthorized');
 
     const { provider } = request.params;
+    const instance = this.providers[provider];
+    if (!instance) return failure(400, `Unknown provider: ${provider}`);
 
-    const fullUser = await this.userRepository.getUser(user.sub);
-    if (!fullUser) return failure(404, 'User not found');
+    const store = this._requireIdentityStore();
+    if (!store) return failure(500, 'Provider unlink failed');
 
-    if (fullUser.providers.length <= 1) {
-      return failure(409, 'Cannot remove last provider — you would be locked out');
+    let existingLinks;
+    try {
+      existingLinks = await this._readLinksFromStore(store, user.sub, 'getLinksForUser');
+    } catch (err) {
+      this.logger?.warn?.(`[AuthController] unlinkProvider getLinksForUser failed userId=${user.sub}: ${err?.message ?? err}`);
+      return oauthFailure(err, { fallbackMessage: 'Provider unlink failed' });
     }
 
-    const updatedUser = await this.userRepository.removeProvider(user.sub, provider);
+    const current = existingLinks.find((entry) => entry.provider === provider);
+    if (!current) {
+      return failure(404, 'Provider is not linked to this user', {
+        code: 'identity_link_not_found',
+        reason: 'provider_not_linked',
+      });
+    }
+
+    if (existingLinks.length <= 1) {
+      return failure(409, 'Cannot remove last provider — you would be locked out', {
+        code: 'last_provider_unlink_forbidden',
+        reason: 'last_linked_provider',
+      });
+    }
+
+    try {
+      await store.unlink({
+        userId: user.sub,
+        provider,
+      });
+    } catch (err) {
+      this.logger?.warn?.(`[AuthController] unlinkProvider store.unlink failed userId=${user.sub} provider=${provider}: ${err?.message ?? err}`);
+      return oauthFailure(err, { fallbackMessage: 'Provider unlink failed' });
+    }
+
+    let links;
+    try {
+      links = await this._readLinksFromStore(store, user.sub, 'getLinksForUser');
+    } catch (err) {
+      this.logger?.warn?.(`[AuthController] unlinkProvider post-unlink getLinksForUser failed userId=${user.sub}: ${err?.message ?? err}`);
+      return oauthFailure(err, { fallbackMessage: 'Provider unlink failed' });
+    }
+
+    const updatedUser = await this._syncProvidersProjection(user.sub, links);
+    if (!updatedUser) {
+      return failure(500, 'Provider unlink failed');
+    }
+
     this.logger?.info?.(`[AuthController] unlinkProvider userId=${user.sub} provider=${provider}`);
     return { providers: updatedUser.providers };
   }
@@ -252,7 +542,18 @@ export default class AuthController {
       this.logger?.info?.(`[AuthController] completeAuth provider=${provider} userId=${result?.user?.userId ?? 'unknown'}`);
       return { redirect: redirectUrl, statusCode: 302 };
     } catch (err) {
-      if (err?.name === 'InvalidStateError') return failure(400, err.message);
+      if (err?.name === 'InvalidStateError') {
+        return failure(400, err.message, {
+          code: 'invalid_state',
+          reason: 'unknown_state',
+        });
+      }
+
+      if (hasNonEmptyString(oauthCodeFromError(err))) {
+        this.logger?.warn?.(`[AuthController] completeAuth typed failure provider=${provider} code=${oauthCodeFromError(err)} reason=${oauthReasonFromError(err) ?? 'n/a'}`);
+        return oauthFailure(err, { fallbackMessage: 'Authentication failed' });
+      }
+
       this.logger?.error?.(`[AuthController] completeAuth error: ${err?.message ?? err}`);
       return failure(500, 'Authentication failed');
     }
