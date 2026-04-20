@@ -17,6 +17,13 @@ const OAUTH_ERROR_CODES = Object.freeze({
   IDENTITY_LINK_CONFLICT: 'identity_link_conflict',
 });
 
+const SESSION_MODE_ALIASES = Object.freeze({
+  session: 'cookie',
+  stateless: 'bearer',
+});
+
+const CANONICAL_SESSION_MODES = new Set(['cookie', 'bearer']);
+
 function hasNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
 }
@@ -69,6 +76,113 @@ function createTypedOauthError({ code, reason, message, details, cause, status }
   }
 
   return err;
+}
+
+function normalizeSessionMode(mode, { allowUndefined = false, field = 'mode' } = {}) {
+  if (mode === undefined || mode === null) {
+    if (allowUndefined) return null;
+    throw createTypedOauthError({
+      code: OAUTH_ERROR_CODES.INVALID_STATE,
+      reason: 'non_empty_string_required',
+      message: `OAuth finalize session metadata requires non-empty ${field}.`,
+      details: { field },
+      status: 400,
+    });
+  }
+
+  if (typeof mode !== 'string' || mode.trim().length === 0) {
+    throw createTypedOauthError({
+      code: OAUTH_ERROR_CODES.INVALID_STATE,
+      reason: 'non_empty_string_required',
+      message: `OAuth finalize session metadata requires non-empty ${field}.`,
+      details: { field },
+      status: 400,
+    });
+  }
+
+  const literal = mode.trim().toLowerCase();
+  const canonical = SESSION_MODE_ALIASES[literal] ?? literal;
+
+  if (!CANONICAL_SESSION_MODES.has(canonical)) {
+    throw createTypedOauthError({
+      code: OAUTH_ERROR_CODES.INVALID_STATE,
+      reason: 'unsupported_session_mode',
+      message: `OAuth finalize session metadata includes unsupported mode literal: ${mode}`,
+      details: { field, mode },
+      status: 400,
+    });
+  }
+
+  return canonical;
+}
+
+function normalizeFinalizeSessionContext(session) {
+  if (session === undefined || session === null) return null;
+
+  if (!isPlainObject(session)) {
+    throw createTypedOauthError({
+      code: OAUTH_ERROR_CODES.INVALID_STATE,
+      reason: 'invalid_session_context',
+      message: 'OAuth finalize session metadata must be an object when provided.',
+      details: { field: 'session' },
+      status: 400,
+    });
+  }
+
+  const mode = normalizeSessionMode(session.mode, {
+    allowUndefined: true,
+    field: 'session.mode',
+  });
+
+  if (session.explicitMode === true && mode === null) {
+    throw createTypedOauthError({
+      code: OAUTH_ERROR_CODES.INVALID_STATE,
+      reason: 'missing_session_mode',
+      message: 'Explicit finalize mode requires a session.mode value.',
+      details: { field: 'session.mode' },
+      status: 400,
+    });
+  }
+
+  if (mode === null) return null;
+
+  const source = hasNonEmptyString(session.source)
+    ? session.source.trim()
+    : (session.explicitMode === true ? 'explicit' : 'inferred');
+
+  return {
+    mode,
+    explicitMode: session.explicitMode === true,
+    source,
+  };
+}
+
+function normalizeFinalizeInputs({ code, state, session }) {
+  if (!hasNonEmptyString(code)) {
+    throw createTypedOauthError({
+      code: OAUTH_ERROR_CODES.INVALID_STATE,
+      reason: 'non_empty_string_required',
+      message: 'OAuth finalize requires non-empty callback code.',
+      details: { field: 'code' },
+      status: 400,
+    });
+  }
+
+  if (!hasNonEmptyString(state)) {
+    throw createTypedOauthError({
+      code: OAUTH_ERROR_CODES.INVALID_STATE,
+      reason: 'non_empty_string_required',
+      message: 'OAuth finalize requires non-empty callback state.',
+      details: { field: 'state' },
+      status: 400,
+    });
+  }
+
+  return {
+    code: code.trim(),
+    state: state.trim(),
+    session: normalizeFinalizeSessionContext(session),
+  };
 }
 
 function normalizeStoreError(operation, err) {
@@ -350,27 +464,41 @@ export default class AuthService {
    * @param {Object} providerInstance
    * @param {string} code
    * @param {string} state
-   * @returns {Promise<{ user: Object, token: string }>} 
+   * @param {{ session?: { mode?: string, explicitMode?: boolean, source?: string } }} [options]
+   * @returns {Promise<{ user: Object, token: string, session?: { mode: string, explicitMode: boolean, source: string } }>} 
    * @throws {InvalidStateError} if state is unknown, expired, or already consumed
    */
-  async completeAuth(providerName, providerInstance, code, state) {
-    const pending = this._pendingAuth.get(state);
+  async completeAuth(providerName, providerInstance, code, state, options = {}) {
+    const finalizedInput = normalizeFinalizeInputs({
+      code,
+      state,
+      session: options?.session,
+    });
+
+    const pending = this._pendingAuth.get(finalizedInput.state);
     if (!pending || Date.now() > pending.expiry) {
-      this._pendingAuth.delete(state);
+      this._pendingAuth.delete(finalizedInput.state);
       this.logger?.warn?.(`[AuthService] unknown/expired state provider=${providerName}`);
       throw new InvalidStateError(`Unknown or expired OAuth state for provider ${providerName}`);
     }
+
     const { codeVerifier, linkMode } = pending;
-    this._pendingAuth.delete(state); // one-time use
+    this._pendingAuth.delete(finalizedInput.state); // one-time use
 
     // Link mode: pass the code back to the SPA instead of exchanging it here.
     // The SPA will call POST /auth/link/:provider with the code.
     if (linkMode) {
-      this.logger?.debug?.('[AuthService] completeAuth linkMode — forwarding code to SPA');
-      return { linkMode: true, code, state, codeVerifier };
+      this.logger?.debug?.(`[AuthService] completeAuth linkMode — forwarding code to SPA mode=${finalizedInput.session?.mode ?? 'n/a'}`);
+      return {
+        linkMode: true,
+        code: finalizedInput.code,
+        state: finalizedInput.state,
+        codeVerifier,
+        ...(finalizedInput.session ? { session: finalizedInput.session } : {}),
+      };
     }
 
-    const callbackResult = await providerInstance.validateCallback(code, codeVerifier);
+    const callbackResult = await providerInstance.validateCallback(finalizedInput.code, codeVerifier);
 
     if (!isPlainObject(callbackResult) || !hasNonEmptyString(callbackResult.providerUserId)) {
       throw createTypedOauthError({
@@ -405,8 +533,12 @@ export default class AuthService {
       this.jwtSecret,
     );
 
-    this.logger?.info?.(`[AuthService] completeAuth provider=${providerName} userId=${synced.user.userId} new=${isNew}`);
+    this.logger?.info?.(`[AuthService] completeAuth provider=${providerName} userId=${synced.user.userId} new=${isNew} mode=${finalizedInput.session?.mode ?? 'n/a'}`);
 
-    return { user: synced.user, token };
+    return {
+      user: synced.user,
+      token,
+      ...(finalizedInput.session ? { session: finalizedInput.session } : {}),
+    };
   }
 }

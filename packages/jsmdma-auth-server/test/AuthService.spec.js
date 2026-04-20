@@ -313,6 +313,47 @@ describe('AuthService', () => {
     });
   });
 
+  describe('completeAuth() mode/session invariants', () => {
+    it('normalizes alias session mode metadata and carries it in finalize results', async () => {
+      const { svc } = await makeService();
+      const provider = new MockProvider('gh-mode-session', 'mode@example.com');
+      const { state } = svc.beginAuth('github', provider);
+
+      const result = await svc.completeAuth('github', provider, 'code', state, {
+        session: {
+          mode: 'session',
+          explicitMode: true,
+        },
+      });
+
+      assert.deepEqual(result.session, {
+        mode: 'cookie',
+        explicitMode: true,
+        source: 'explicit',
+      });
+    });
+
+    it('normalizes stateless alias to bearer and keeps explicit metadata', async () => {
+      const { svc } = await makeService();
+      const provider = new MockProvider('gh-mode-stateless', 'mode2@example.com');
+      const { state } = svc.beginAuth('github', provider);
+
+      const result = await svc.completeAuth('github', provider, 'code', state, {
+        session: {
+          mode: 'stateless',
+          explicitMode: true,
+          source: 'query',
+        },
+      });
+
+      assert.deepEqual(result.session, {
+        mode: 'bearer',
+        explicitMode: true,
+        source: 'query',
+      });
+    });
+  });
+
   describe('completeAuth() typed failure paths', () => {
     it('throws InvalidStateError for unknown/tampered state', async () => {
       const { svc } = await makeService();
@@ -326,11 +367,86 @@ describe('AuthService', () => {
       assert.instanceOf(err, InvalidStateError);
     });
 
+    it('fails closed with typed reason when finalize code is missing', async () => {
+      const { svc } = await makeService();
+      const provider = new MockProvider('gh-missing-code');
+      const { state } = svc.beginAuth('github', provider);
+
+      const err = await captureAsyncError(() => (
+        svc.completeAuth('github', provider, '', state)
+      ));
+
+      assert.equal(err?.code, 'invalid_state');
+      assert.equal(err?.reason, 'non_empty_string_required');
+      assert.equal(err?.details?.field, 'code');
+    });
+
+    it('fails closed with typed reason when finalize state is missing', async () => {
+      const { svc } = await makeService();
+      const provider = new MockProvider('gh-missing-state');
+      svc.beginAuth('github', provider);
+
+      const err = await captureAsyncError(() => (
+        svc.completeAuth('github', provider, 'code', '')
+      ));
+
+      assert.equal(err?.code, 'invalid_state');
+      assert.equal(err?.reason, 'non_empty_string_required');
+      assert.equal(err?.details?.field, 'state');
+    });
+
+    it('rejects unsupported session modes deterministically', async () => {
+      const { svc } = await makeService();
+      const provider = new MockProvider('gh-unsupported-mode');
+      const { state } = svc.beginAuth('github', provider);
+
+      const err = await captureAsyncError(() => (
+        svc.completeAuth('github', provider, 'code', state, {
+          session: { mode: 'cookie-jwt' },
+        })
+      ));
+
+      assert.equal(err?.code, 'invalid_state');
+      assert.equal(err?.reason, 'unsupported_session_mode');
+      assert.equal(err?.details?.field, 'session.mode');
+    });
+
+    it('rejects malformed finalize session metadata shape', async () => {
+      const { svc } = await makeService();
+      const provider = new MockProvider('gh-malformed-session');
+      const { state } = svc.beginAuth('github', provider);
+
+      const err = await captureAsyncError(() => (
+        svc.completeAuth('github', provider, 'code', state, {
+          session: 'cookie',
+        })
+      ));
+
+      assert.equal(err?.code, 'invalid_state');
+      assert.equal(err?.reason, 'invalid_session_context');
+    });
+
     it('fails closed when callback payload is malformed', async () => {
       const { svc } = await makeService();
       const malformedProvider = {
         createAuthorizationURL: (state) => new URL(`https://mock.provider/auth?state=${state}`),
         validateCallback: async () => ({ email: 'missing-provider-user-id@example.com' }),
+      };
+      const { state } = svc.beginAuth('github', malformedProvider);
+
+      const err = await captureAsyncError(() => (
+        svc.completeAuth('github', malformedProvider, 'code', state)
+      ));
+
+      assert.equal(err?.code, 'invalid_state');
+      assert.equal(err?.reason, 'malformed_provider_callback');
+    });
+
+    it('fails closed when callback providerUserId is empty', async () => {
+      const { svc } = await makeService();
+      const malformedProvider = {
+        createAuthorizationURL: (state) => new URL(`https://mock.provider/auth?state=${state}`),
+        validateCallback: async () => ({ providerUserId: '   ', email: 'empty-provider-user-id@example.com' }),
       };
       const { state } = svc.beginAuth('github', malformedProvider);
 
