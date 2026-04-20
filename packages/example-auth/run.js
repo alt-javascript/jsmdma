@@ -14,39 +14,7 @@
  *   node packages/example-auth/run.js
  */
 
-import '@alt-javascript/jsnosqlc-memory';
-import { Context, ApplicationContext } from '@alt-javascript/cdi';
-import { EphemeralConfig } from '@alt-javascript/config';
-import { jsmdmaHonoStarter } from '@alt-javascript/jsmdma-hono';
-import path from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { createRequire } from 'node:module';
-
-const require = createRequire(import.meta.url);
-
-async function registerBootWorkspaceMemoryDriver() {
-  let bootJsnosqlcEntry = null;
-  try {
-    bootJsnosqlcEntry = require.resolve('@alt-javascript/boot-jsnosqlc');
-  } catch {
-    return;
-  }
-
-  const bootMemoryDriverEntry = path.join(
-    path.dirname(bootJsnosqlcEntry),
-    '../../node_modules/@alt-javascript/jsnosqlc-memory/index.js',
-  );
-
-  try {
-    await import(pathToFileURL(bootMemoryDriverEntry).href);
-  } catch (err) {
-    if (err?.code !== 'ERR_MODULE_NOT_FOUND' && err?.code !== 'ENOENT') {
-      throw err;
-    }
-  }
-}
-
-await registerBootWorkspaceMemoryDriver();
+import { buildAuthOnlyStarterApp } from './runtime/authStarterRuntime.js';
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
@@ -118,38 +86,6 @@ class MockProvider {
   }
 }
 
-// ── CDI context ───────────────────────────────────────────────────────────────
-
-async function buildContext(providers) {
-  const config = new EphemeralConfig({
-    boot: { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
-    logging: { level: { ROOT: 'error' } },
-    server: { port: 0 },
-    auth: { jwt: { secret: JWT_SECRET } },
-    orgs: { registerable: false },
-  });
-
-  const context = new Context([
-    ...jsmdmaHonoStarter({
-      features: {
-        sync: false,
-        appSyncController: false,
-      },
-    }),
-  ]);
-
-  const appCtx = new ApplicationContext({ contexts: [context], config });
-  await appCtx.start({ run: false });
-  await appCtx.get('nosqlClient').ready();
-
-  appCtx.get('authController').providers = providers;
-
-  return {
-    app: appCtx.get('honoAdapter').app,
-    appCtx,
-  };
-}
-
 // ── lifecycle helpers ─────────────────────────────────────────────────────────
 
 async function beginAuth(app, provider, query = '') {
@@ -186,12 +122,15 @@ async function linkFinalize(app, { token, provider, state }) {
 async function main() {
   banner('jsmdma — Mode-aware Auth Lifecycle Example');
 
-  const { app } = await buildContext({
-    github: new MockProvider('gh-user-1', 'alice@github.com'),
-    google: new MockProvider('google-user-1', 'alice@google.com'),
+  const { app } = await buildAuthOnlyStarterApp({
+    jwtSecret: JWT_SECRET,
+    providers: {
+      github: new MockProvider('gh-user-1', 'alice@github.com'),
+      google: new MockProvider('google-user-1', 'alice@google.com'),
+    },
   });
 
-  console.log('\n  ✓ CDI context ready (mock providers: github, google)');
+  console.log('\n  ✓ Boot-first starter context ready (mock providers: github, google)');
 
   // ── Step 1: login finalize (bearer mode) ───────────────────────────────────
 
