@@ -8,7 +8,7 @@
  * Composition order is intentional:
  *   1) Hono + jsnosql boot infrastructure
  *   2) (optional) sync services and application/schema wiring
- *   3) (optional) auth-hono starter (includes AuthMiddlewareRegistrar)
+ *   3) (optional) auth stack foundation: auth-hono middleware + boot oauth registrations
  *   4) (optional) AppSyncController (must stay after auth middleware)
  *
  * Advanced options are constrained to prevent impossible/wiring-unsafe combinations:
@@ -17,6 +17,8 @@
  */
 import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
+import { oauthStarter } from '@alt-javascript/boot-oauth';
+import { oauthJsnosqlcStarter } from '@alt-javascript/boot-oauth-jsnosqlc';
 import {
   SyncRepository,
   SyncService,
@@ -282,7 +284,22 @@ export function jsmdmaHonoStarter(options = {}) {
   registrations.push(...hooks.beforeAuth);
 
   if (features.auth) {
-    registrations.push(...authHonoStarter());
+    const authRegistrations = authHonoStarter();
+    const legacyAuthControllerNames = new Set(['authController', 'orgController']);
+
+    const authInfrastructureRegistrations = authRegistrations.filter(
+      (registration) => !legacyAuthControllerNames.has(registration?.name),
+    );
+    const legacyAuthControllerRegistrations = authRegistrations.filter(
+      (registration) => legacyAuthControllerNames.has(registration?.name),
+    );
+
+    registrations.push(
+      ...authInfrastructureRegistrations,
+      ...oauthJsnosqlcStarter(),
+      ...oauthStarter(),
+      ...legacyAuthControllerRegistrations,
+    );
   }
 
   registrations.push(...hooks.beforeAppSync);

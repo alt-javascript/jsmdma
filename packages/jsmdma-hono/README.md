@@ -50,6 +50,24 @@ const context = new Context([
 ]);
 ```
 
+## Canonical Starter Composition (`jsmdmaHonoStarter`)
+
+`jsmdmaHonoStarter()` now composes the auth-enabled stack in this order:
+
+1. `honoStarter()` + `jsnosqlcAutoConfiguration()` infrastructure
+2. jsmdma sync services (`SyncRepository`, `SyncService`, `AppSyncService`, registry/validator)
+3. auth middleware/error layer from `authHonoStarter()`
+4. boot oauth foundation (`oauthJsnosqlcStarter()`, `oauthStarter()`)
+5. legacy jsmdma auth controllers (`AuthController`, `OrgController`)
+6. `AppSyncController`
+
+This keeps middleware ordering deterministic while exposing boot oauth routes (`/oauth/:provider/authorize`, `/oauth/:provider/callback`) on the canonical starter path.
+
+Feature closures are still enforced:
+
+- `features.auth=false` excludes both auth and oauth stacks.
+- `features.sync=true` requires `features.auth=true`.
+
 ## Further Reading
 
 - [Sync Protocol Reference](../../docs/sync-protocol.md)

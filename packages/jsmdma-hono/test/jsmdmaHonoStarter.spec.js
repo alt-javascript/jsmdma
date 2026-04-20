@@ -1,11 +1,40 @@
 /**
  * jsmdmaHonoStarter.spec.js — Integration tests for canonical starter composition.
  */
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
 import { assert } from 'chai';
 import '@alt-javascript/jsnosqlc-memory';
 import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
 import { jsmdmaHonoStarter } from '../jsmdmaHonoStarter.js';
+
+const require = createRequire(import.meta.url);
+
+async function registerBootWorkspaceMemoryDriver() {
+  let bootJsnosqlcEntry = null;
+  try {
+    bootJsnosqlcEntry = require.resolve('@alt-javascript/boot-jsnosqlc');
+  } catch {
+    return;
+  }
+
+  const bootMemoryDriverEntry = path.join(
+    path.dirname(bootJsnosqlcEntry),
+    '../../node_modules/@alt-javascript/jsnosqlc-memory/index.js',
+  );
+
+  try {
+    await import(pathToFileURL(bootMemoryDriverEntry).href);
+  } catch (err) {
+    if (err?.code !== 'ERR_MODULE_NOT_FOUND' && err?.code !== 'ENOENT') {
+      throw err;
+    }
+  }
+}
+
+await registerBootWorkspaceMemoryDriver();
 
 const JWT_SECRET = 'jsmdmaHonoStarter-test-secret-32!!';
 
@@ -38,6 +67,10 @@ class MalformedErrorController {
   malformedError() {
     return { statusCode: 418, body: 'teapot exploded' };
   }
+}
+
+class InvalidOAuthTransactionStore {
+  ready() {}
 }
 
 async function buildContext({ configData = BASE_CONFIG, starterOptions } = {}) {
@@ -75,6 +108,13 @@ describe('jsmdmaHonoStarter()', () => {
       'schemaValidator',
       'frameworkErrorContractMiddleware',
       'authMiddlewareRegistrar',
+      'oauthTransactionPolicy',
+      'oauthTransactionStore',
+      'oauthIdentityLinkStore',
+      'oauthGoogleProviderAdapter',
+      'oauthGitHubProviderAdapter',
+      'oauthStarterService',
+      'oauthStarterController',
       'authController',
       'orgController',
       'appSyncController',
@@ -116,6 +156,12 @@ describe('jsmdmaHonoStarter()', () => {
     const beforeAuthIdx = names.indexOf('beforeAuthHook');
     const frameworkErrorMiddlewareIdx = names.indexOf('frameworkErrorContractMiddleware');
     const authMiddlewareIdx = names.indexOf('authMiddlewareRegistrar');
+    const oauthTransactionPolicyIdx = names.indexOf('oauthTransactionPolicy');
+    const oauthTransactionStoreIdx = names.indexOf('oauthTransactionStore');
+    const oauthStarterServiceIdx = names.indexOf('oauthStarterService');
+    const oauthStarterControllerIdx = names.indexOf('oauthStarterController');
+    const authControllerIdx = names.indexOf('authController');
+    const orgControllerIdx = names.indexOf('orgController');
     const beforeAppSyncIdx = names.indexOf('beforeAppSyncHook');
     const appSyncIdx = names.indexOf('appSyncController');
     const afterAppSyncIdx = names.indexOf('afterAppSyncHook');
@@ -128,8 +174,22 @@ describe('jsmdmaHonoStarter()', () => {
     assert.isBelow(beforeAuthIdx, frameworkErrorMiddlewareIdx, 'beforeAuth hook should be inserted before error middleware');
     assert.isBelow(frameworkErrorMiddlewareIdx, authMiddlewareIdx, 'error middleware must remain before auth middleware');
 
+    assert.isAtLeast(oauthTransactionPolicyIdx, 0);
+    assert.isAtLeast(oauthTransactionStoreIdx, 0);
+    assert.isAtLeast(oauthStarterServiceIdx, 0);
+    assert.isAtLeast(oauthStarterControllerIdx, 0);
+    assert.isBelow(authMiddlewareIdx, oauthTransactionPolicyIdx, 'auth middleware should be registered before oauth stores/providers');
+    assert.isBelow(oauthTransactionPolicyIdx, oauthTransactionStoreIdx, 'oauth transaction policy should precede oauth transaction store');
+    assert.isBelow(oauthTransactionStoreIdx, oauthStarterServiceIdx, 'oauth transaction store should precede oauth starter service');
+    assert.isBelow(oauthStarterServiceIdx, oauthStarterControllerIdx, 'oauth starter service should precede oauth starter controller');
+
+    assert.isAtLeast(authControllerIdx, 0);
+    assert.isAtLeast(orgControllerIdx, 0);
+    assert.isBelow(oauthStarterControllerIdx, authControllerIdx, 'oauth starter controller should be registered before legacy auth controllers');
+    assert.isBelow(authControllerIdx, orgControllerIdx, 'auth controller should remain ordered before org controller');
+
     assert.isAtLeast(beforeAppSyncIdx, 0);
-    assert.isBelow(authMiddlewareIdx, beforeAppSyncIdx, 'auth middleware must remain before beforeAppSync stage');
+    assert.isBelow(oauthStarterControllerIdx, beforeAppSyncIdx, 'oauth routes should remain inside auth stage before beforeAppSync hooks');
     assert.isBelow(beforeAppSyncIdx, appSyncIdx, 'beforeAppSync hook should be inserted before appSyncController');
 
     assert.isAtLeast(appSyncServiceIdx, 0);
@@ -259,6 +319,8 @@ describe('jsmdmaHonoStarter()', () => {
     assert.notInclude(names, 'schemaValidator');
     assert.notInclude(names, 'appSyncController');
     assert.include(names, 'authMiddlewareRegistrar');
+    assert.include(names, 'oauthTransactionStore');
+    assert.include(names, 'oauthStarterController');
 
     const authMe = await app.request('/auth/me');
     assert.equal(authMe.status, 401);
@@ -266,6 +328,44 @@ describe('jsmdmaHonoStarter()', () => {
       error: 'Unauthorized',
       code:  'unauthorized',
     });
+  });
+
+  it('excludes auth and oauth stacks when auth=false and dependent features are disabled', async () => {
+    const appCtx = await buildContext({
+      starterOptions: {
+        features: {
+          auth: false,
+          sync: false,
+          appSyncController: false,
+        },
+      },
+    });
+    const app = appCtx.get('honoAdapter').app;
+
+    const regs = jsmdmaHonoStarter({
+      features: {
+        auth: false,
+        sync: false,
+        appSyncController: false,
+      },
+    });
+    const names = regs.map((r) => r.name);
+
+    assert.notInclude(names, 'frameworkErrorContractMiddleware');
+    assert.notInclude(names, 'authMiddlewareRegistrar');
+    assert.notInclude(names, 'authController');
+    assert.notInclude(names, 'orgController');
+    assert.notInclude(names, 'oauthTransactionPolicy');
+    assert.notInclude(names, 'oauthTransactionStore');
+    assert.notInclude(names, 'oauthIdentityLinkStore');
+    assert.notInclude(names, 'oauthStarterService');
+    assert.notInclude(names, 'oauthStarterController');
+
+    const authMe = await app.request('/auth/me');
+    assert.equal(authMe.status, 404);
+
+    const oauthAuthorize = await app.request('/oauth/google/authorize');
+    assert.equal(oauthAuthorize.status, 404);
   });
 
   it('boots with maximal supported options (explicit features + all hook stages)', async () => {
@@ -314,6 +414,28 @@ describe('jsmdmaHonoStarter()', () => {
       error: 'teapot exploded',
       code:  'request_error',
     });
+  });
+
+  it('fails fast at startup when oauth transaction store wiring is malformed', async () => {
+    let startupError = null;
+    try {
+      await buildContext({
+        starterOptions: {
+          hooks: {
+            beforeAuth: [{
+              Reference: InvalidOAuthTransactionStore,
+              name: 'oauthTransactionStore',
+              scope: 'singleton',
+            }],
+          },
+        },
+      });
+    } catch (err) {
+      startupError = err;
+    }
+
+    assert.instanceOf(startupError, Error);
+    assert.include(startupError.message, 'oauthTransactionStore');
   });
 
   it('fails fast at startup when auth.jwt.secret is missing', async () => {
