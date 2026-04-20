@@ -1,6 +1,7 @@
 import '@alt-javascript/jsnosqlc-memory';
-import { Context, ApplicationContext } from '@alt-javascript/cdi';
-import { EphemeralConfig } from '@alt-javascript/config';
+import { Context } from '@alt-javascript/cdi';
+import { Boot } from '@alt-javascript/boot';
+import { ConfigFactory } from '@alt-javascript/config';
 import {
   jsmdmaHonoStarter,
   DocIndexController,
@@ -16,13 +17,48 @@ import {
 } from '@alt-javascript/jsmdma-server';
 import { AuthMiddlewareRegistrar, OrgController } from '@alt-javascript/jsmdma-auth-hono';
 import { UserRepository, OrgRepository, OrgService } from '@alt-javascript/jsmdma-auth-server';
-import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const FULL_STACK_JWT_SECRET = 'run-apps-jwt-secret-at-least-32chars!';
 
+export const FULL_STACK_PACKAGE_BASE_PATH = fileURLToPath(new URL('..', import.meta.url));
 export const FULL_STACK_PLANNER_SCHEMA_PATH = fileURLToPath(new URL('../schemas/planner.json', import.meta.url));
 export const FULL_STACK_APP_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../schemas/planner-preferences.json', import.meta.url));
 export const FULL_STACK_GENERIC_PREFERENCES_SCHEMA_PATH = fileURLToPath(new URL('../../jsmdma-server/schemas/preferences.json', import.meta.url));
+
+const require = createRequire(import.meta.url);
+
+async function registerBootWorkspaceMemoryDriver() {
+  let bootJsnosqlcEntry = null;
+
+  try {
+    const jsmdmaHonoEntry = require.resolve('@alt-javascript/jsmdma-hono');
+    bootJsnosqlcEntry = require.resolve('@alt-javascript/boot-jsnosqlc', {
+      paths: [path.dirname(jsmdmaHonoEntry)],
+    });
+  } catch {
+    try {
+      bootJsnosqlcEntry = require.resolve('@alt-javascript/boot-jsnosqlc');
+    } catch {
+      return;
+    }
+  }
+
+  const bootMemoryDriverEntry = path.join(
+    path.dirname(bootJsnosqlcEntry),
+    '../../node_modules/@alt-javascript/jsnosqlc-memory/index.js',
+  );
+
+  try {
+    await import(pathToFileURL(bootMemoryDriverEntry).href);
+  } catch (err) {
+    if (err?.code !== 'ERR_MODULE_NOT_FOUND' && err?.code !== 'ENOENT') {
+      throw err;
+    }
+  }
+}
 
 export const FULL_STACK_APPLICATIONS_CONFIG = {
   todo: {
@@ -130,9 +166,6 @@ export function createFullStackConfig({
   orgsRegisterable = true,
 } = {}) {
   const config = {
-    boot: { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
-    logging: { level: { ROOT: 'error' } },
-    server: { port: 0 },
     auth: { jwt: { secret: jwtSecret } },
     applications: applicationsConfig,
   };
@@ -152,17 +185,29 @@ export function createNoRegStarterOptions(overrides = {}) {
   return mergeStarterOptions(NO_REG_ORG_ONLY_STARTER_OPTIONS, overrides);
 }
 
+export function loadFullStackConfig({
+  basePath = FULL_STACK_PACKAGE_BASE_PATH,
+  overrides,
+} = {}) {
+  return ConfigFactory.loadConfig({
+    basePath,
+    overrides,
+  });
+}
+
 async function buildStarterApplicationContext({ config, starterOptions }) {
+  await registerBootWorkspaceMemoryDriver();
+
   const context = new Context([
     ...jsmdmaHonoStarter(starterOptions),
   ]);
 
-  const appCtx = new ApplicationContext({
+  const appCtx = await Boot.boot({
     contexts: [context],
-    config: new EphemeralConfig(config),
+    run: false,
+    config,
   });
 
-  await appCtx.start({ run: false });
   await appCtx.get('nosqlClient').ready();
 
   return appCtx;
@@ -173,12 +218,16 @@ export async function buildFullStackStarterContext({
   applicationsConfig = FULL_STACK_APPLICATIONS_CONFIG,
   orgsRegisterable = true,
   starterOptions = {},
+  basePath = FULL_STACK_PACKAGE_BASE_PATH,
 } = {}) {
-  const config = createFullStackConfig({
-    jwtSecret,
-    applicationsConfig,
-    includeOrgsRegisterable: true,
-    orgsRegisterable,
+  const config = loadFullStackConfig({
+    basePath,
+    overrides: createFullStackConfig({
+      jwtSecret,
+      applicationsConfig,
+      includeOrgsRegisterable: true,
+      orgsRegisterable,
+    }),
   });
 
   return buildStarterApplicationContext({
@@ -199,11 +248,15 @@ export async function buildFullStackStarterContextNoReg({
   jwtSecret = FULL_STACK_JWT_SECRET,
   applicationsConfig = FULL_STACK_APPLICATIONS_CONFIG,
   starterOptions = {},
+  basePath = FULL_STACK_PACKAGE_BASE_PATH,
 } = {}) {
-  const config = createFullStackConfig({
-    jwtSecret,
-    applicationsConfig,
-    includeOrgsRegisterable: false,
+  const config = loadFullStackConfig({
+    basePath,
+    overrides: createFullStackConfig({
+      jwtSecret,
+      applicationsConfig,
+      includeOrgsRegisterable: false,
+    }),
   });
 
   return buildStarterApplicationContext({

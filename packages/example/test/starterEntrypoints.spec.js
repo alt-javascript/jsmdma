@@ -3,9 +3,6 @@ import '@alt-javascript/jsnosqlc-memory';
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Context, ApplicationContext } from '@alt-javascript/cdi';
-import { EphemeralConfig } from '@alt-javascript/config';
-import { jsmdmaHonoStarter } from '@alt-javascript/jsmdma-hono';
 import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 import { HLC } from '@alt-javascript/jsmdma-core';
 import {
@@ -17,36 +14,24 @@ import {
   buildFullStackStarterAppNoReg,
   buildFullStackStarterContext,
 } from '../runtime/fullStackStarterApp.js';
+import {
+  SHARED_NOTES_APPLICATION,
+  buildSharedNotesStarterContext,
+} from '../runtime/sharedNotesStarterApp.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RUN_JS_PATH = resolve(__dirname, '../run.js');
 const RUN_APPS_PATH = resolve(__dirname, '../run-apps.js');
 const LAMBDA_HANDLER_PATH = resolve(__dirname, '../lambda-handler.js');
 const FULL_STACK_RUNTIME_PATH = resolve(__dirname, '../runtime/fullStackStarterApp.js');
+const SHARED_NOTES_RUNTIME_PATH = resolve(__dirname, '../runtime/sharedNotesStarterApp.js');
 
 const RUN_JS_JWT_SECRET = 'example-jwt-secret-at-least-32-chars!';
-const RUN_JS_APPLICATION = 'shared-notes';
 
 async function buildRunJsContext() {
-  const config = new EphemeralConfig({
-    boot: { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
-    logging: { level: { ROOT: 'error' } },
-    server: { port: 0 },
-    auth: { jwt: { secret: RUN_JS_JWT_SECRET } },
-    applications: {
-      [RUN_JS_APPLICATION]: { description: 'Shared notes application (example)' },
-    },
-    orgs: { registerable: false },
+  return buildSharedNotesStarterContext({
+    jwtSecret: RUN_JS_JWT_SECRET,
   });
-
-  const context = new Context([
-    ...jsmdmaHonoStarter(),
-  ]);
-
-  const appCtx = new ApplicationContext({ contexts: [context], config });
-  await appCtx.start({ run: false });
-  await appCtx.get('nosqlClient').ready();
-  return appCtx;
 }
 
 async function syncPost(app, application, body, token) {
@@ -77,18 +62,19 @@ async function expectStartupFailure(factory, expectedMessagePart) {
 
 describe('starter entrypoint regressions (packages/example)', () => {
   describe('source contracts', () => {
-    it('run.js remains starter-based (no manual sync/auth assembly)', async () => {
+    it('run.js remains helper-owned (no manual context/config startup assembly)', async () => {
       const source = await readFile(RUN_JS_PATH, 'utf8');
 
-      assert.match(
-        source,
-        /import\s*\{\s*jsmdmaHonoStarter\s*\}\s*from\s*['"]@alt-javascript\/jsmdma-hono['"];/,
-      );
-      assert.match(source, /new\s+Context\(\s*\[\s*\.\.\.jsmdmaHonoStarter\(\)\s*,?\s*\]\s*\)/s);
+      assert.match(source, /from\s*['"]\.\/runtime\/sharedNotesStarterApp\.js['"]/);
+      assert.match(source, /buildSharedNotesStarterApp\s*\(/);
 
-      // Guard against regressing this entrypoint to manual wiring imports.
-      assert.notMatch(source, /from\s*['"]@alt-javascript\/jsmdma-server['"]/);
-      assert.notMatch(source, /from\s*['"]@alt-javascript\/jsmdma-auth-hono['"]/);
+      // Guard against regressing this entrypoint to manual startup assembly.
+      assert.notMatch(source, /from\s*['"]@alt-javascript\/cdi['"]/);
+      assert.notMatch(source, /from\s*['"]@alt-javascript\/config['"]/);
+      assert.notMatch(source, /from\s*['"]@alt-javascript\/jsmdma-hono['"]/);
+      assert.notMatch(source, /new\s+Context\(/);
+      assert.notMatch(source, /new\s+ApplicationContext\(/);
+      assert.notMatch(source, /new\s+EphemeralConfig\(/);
     });
 
     it('run-apps.js consumes the shared full-stack starter runtime module', async () => {
@@ -119,6 +105,17 @@ describe('starter entrypoint regressions (packages/example)', () => {
       assert.notMatch(source, /from\s*['"]@alt-javascript\/jsmdma-auth-hono['"]/);
     });
 
+    it('shared notes helper owns package-base config loading + boot-first startup', async () => {
+      const source = await readFile(SHARED_NOTES_RUNTIME_PATH, 'utf8');
+
+      assert.include(source, 'ConfigFactory.loadConfig');
+      assert.include(source, 'Boot.boot({');
+      assert.include(source, 'SHARED_NOTES_PACKAGE_BASE_PATH');
+      assert.include(source, 'basePath = SHARED_NOTES_PACKAGE_BASE_PATH');
+      assert.include(source, 'run: false');
+      assert.include(source, 'buildSharedNotesStarterContext');
+    });
+
     it('shared runtime module owns full-stack hooks, schema paths, and no-reg starter options', async () => {
       const source = await readFile(FULL_STACK_RUNTIME_PATH, 'utf8');
 
@@ -127,6 +124,9 @@ describe('starter entrypoint regressions (packages/example)', () => {
       assert.include(source, 'beforeAppSync');
       assert.include(source, 'afterAppSync');
       assert.include(source, 'export const NO_REG_ORG_ONLY_STARTER_OPTIONS');
+      assert.include(source, 'ConfigFactory.loadConfig');
+      assert.include(source, 'Boot.boot({');
+      assert.include(source, 'FULL_STACK_PACKAGE_BASE_PATH');
       assert.include(source, 'includeOrgsRegisterable: false');
       assert.include(source, 'buildFullStackStarterAppNoReg');
     });
@@ -142,7 +142,7 @@ describe('starter entrypoint regressions (packages/example)', () => {
         assert.equal(health.status, 200);
         assert.deepEqual(await health.json(), { status: 'ok' });
 
-        const unauthSync = await app.request(`/${RUN_JS_APPLICATION}/sync`, {
+        const unauthSync = await app.request(`/${SHARED_NOTES_APPLICATION}/sync`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -295,6 +295,56 @@ describe('starter entrypoint regressions (packages/example)', () => {
         () => buildFullStackStarterContext({ applicationsConfig: null }),
         'Missing or invalid config at applications',
       );
+    });
+
+    it('fails explicitly when planner schema path overlay is missing', async () => {
+      const missingSchemaPath = '/definitely-missing/planner-schema.json';
+      const yearPlannerConfig = FULL_STACK_APPLICATIONS_CONFIG['year-planner'];
+      const appCtx = await buildFullStackStarterContext({
+        applicationsConfig: {
+          ...FULL_STACK_APPLICATIONS_CONFIG,
+          'year-planner': {
+            ...yearPlannerConfig,
+            collections: {
+              ...yearPlannerConfig.collections,
+              planners: {
+                ...yearPlannerConfig.collections.planners,
+                schemaPath: missingSchemaPath,
+              },
+            },
+          },
+        },
+      });
+
+      try {
+        const app = appCtx.get('honoAdapter').app;
+        const token = await JwtSession.sign(
+          { sub: 'missing-schema-user', providers: ['test'] },
+          FULL_STACK_JWT_SECRET,
+        );
+        const badClock = HLC.tick(HLC.zero(), Date.now());
+
+        const response = await syncPost(app, 'year-planner', {
+          collection: 'planners',
+          clientClock: HLC.zero(),
+          changes: [{
+            key: 'planner-missing-schema',
+            doc: { meta: { name: 'Missing schema path' } },
+            fieldRevs: { meta: badClock },
+            baseClock: HLC.zero(),
+          }],
+        }, token);
+
+        assert.equal(response.status, 400);
+        assert.equal(response.body.error, 'Schema validation failed');
+        assert.isArray(response.body.details);
+        assert.isTrue(
+          response.body.details.some((detail) => detail.message.includes(`SchemaValidator: failed to load schema from "${missingSchemaPath}"`)),
+          `Expected missing schema path detail, got: ${JSON.stringify(response.body.details)}`,
+        );
+      } finally {
+        await appCtx.stop?.();
+      }
     });
   });
 
