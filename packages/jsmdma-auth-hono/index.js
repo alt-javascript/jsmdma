@@ -21,4 +21,8 @@ export {
   sessionModeAliases,
 } from './sessionModeContract.js';
 export { default as OrgController } from './OrgController.js';
-export { authHonoStarter } from './authHonoStarter.js';
+export {
+  authHonoStarter,
+  legacyAuthHonoControllerNames,
+  splitAuthHonoStarterRegistrations,
+} from './authHonoStarter.js';

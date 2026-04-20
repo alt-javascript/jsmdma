@@ -26,7 +26,9 @@ import {
   ApplicationRegistry,
   SchemaValidator,
 } from '@alt-javascript/jsmdma-server';
-import { authHonoStarter } from '@alt-javascript/jsmdma-auth-hono';
+import {
+  splitAuthHonoStarterRegistrations,
+} from '@alt-javascript/jsmdma-auth-hono';
 import AppSyncController from './AppSyncController.js';
 
 const ALLOWED_OPTION_KEYS = ['features', 'hooks'];
@@ -284,21 +286,16 @@ export function jsmdmaHonoStarter(options = {}) {
   registrations.push(...hooks.beforeAuth);
 
   if (features.auth) {
-    const authRegistrations = authHonoStarter();
-    const legacyAuthControllerNames = new Set(['authController', 'orgController']);
-
-    const authInfrastructureRegistrations = authRegistrations.filter(
-      (registration) => !legacyAuthControllerNames.has(registration?.name),
-    );
-    const legacyAuthControllerRegistrations = authRegistrations.filter(
-      (registration) => legacyAuthControllerNames.has(registration?.name),
-    );
+    const {
+      infrastructureRegistrations,
+      legacyControllerRegistrations,
+    } = splitAuthHonoStarterRegistrations();
 
     registrations.push(
-      ...authInfrastructureRegistrations,
+      ...infrastructureRegistrations,
       ...oauthJsnosqlcStarter(),
       ...oauthStarter(),
-      ...legacyAuthControllerRegistrations,
+      ...legacyControllerRegistrations,
     );
   }
 

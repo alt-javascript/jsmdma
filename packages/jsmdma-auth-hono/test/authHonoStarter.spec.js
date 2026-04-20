@@ -13,7 +13,11 @@ import {
 } from '@alt-javascript/jsmdma-server';
 import { AppSyncController } from '@alt-javascript/jsmdma-hono';
 import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
-import { authHonoStarter } from '../authHonoStarter.js';
+import {
+  authHonoStarter,
+  legacyAuthHonoControllerNames,
+  splitAuthHonoStarterRegistrations,
+} from '../authHonoStarter.js';
 
 const JWT_SECRET = 'authHonoStarter-test-secret-32!!';
 
@@ -267,6 +271,48 @@ describe('authHonoStarter()', () => {
       names.indexOf('frameworkErrorContractMiddleware'),
       names.indexOf('authMiddlewareRegistrar'),
       'error middleware must register before auth middleware',
+    );
+  });
+
+  it('splitAuthHonoStarterRegistrations() returns explicit auth infrastructure/controller boundaries', () => {
+    const registrations = authHonoStarter();
+    const { infrastructureRegistrations, legacyControllerRegistrations } = splitAuthHonoStarterRegistrations(registrations);
+
+    assert.deepEqual(
+      legacyControllerRegistrations.map((registration) => registration.name),
+      legacyAuthHonoControllerNames,
+    );
+
+    const stitchedNames = [...infrastructureRegistrations, ...legacyControllerRegistrations]
+      .map((registration) => registration.name);
+    assert.deepEqual(stitchedNames, registrations.map((registration) => registration.name));
+
+    assert.include(
+      infrastructureRegistrations.map((registration) => registration.name),
+      'authMiddlewareRegistrar',
+      'auth middleware must remain in the infrastructure group',
+    );
+  });
+
+  it('splitAuthHonoStarterRegistrations() fails fast on malformed boundary input', () => {
+    const registrations = authHonoStarter();
+
+    const withoutOrgController = registrations.filter((registration) => registration.name !== 'orgController');
+    assert.throws(
+      () => splitAuthHonoStarterRegistrations(withoutOrgController),
+      'Missing required legacy auth controller registration(s): orgController',
+    );
+
+    const withoutAuthMiddleware = registrations.filter((registration) => registration.name !== 'authMiddlewareRegistrar');
+    assert.throws(
+      () => splitAuthHonoStarterRegistrations(withoutAuthMiddleware),
+      'Missing required infrastructure registration(s): authMiddlewareRegistrar',
+    );
+
+    const duplicateNameRegistrations = [...registrations, { ...registrations[0] }];
+    assert.throws(
+      () => splitAuthHonoStarterRegistrations(duplicateNameRegistrations),
+      'Duplicate registration name(s) detected: userRepository',
     );
   });
 });

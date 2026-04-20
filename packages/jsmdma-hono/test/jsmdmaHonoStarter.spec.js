@@ -9,6 +9,7 @@ import '@alt-javascript/jsnosqlc-memory';
 import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
 import { jsmdmaHonoStarter } from '../jsmdmaHonoStarter.js';
+import { splitAuthHonoStarterRegistrations } from '@alt-javascript/jsmdma-auth-hono';
 
 const require = createRequire(import.meta.url);
 
@@ -119,6 +120,43 @@ describe('jsmdmaHonoStarter()', () => {
       'orgController',
       'appSyncController',
     ]);
+  });
+
+  it('inserts oauth registrations between explicit auth-hono infrastructure and legacy controllers', () => {
+    const registrations = jsmdmaHonoStarter();
+    const names = registrations.map((registration) => registration.name);
+
+    const {
+      infrastructureRegistrations,
+      legacyControllerRegistrations,
+    } = splitAuthHonoStarterRegistrations();
+
+    const infrastructureNames = infrastructureRegistrations.map((registration) => registration.name);
+    const legacyControllerNames = legacyControllerRegistrations.map((registration) => registration.name);
+    const firstOauthRegistrationIndex = names.indexOf('oauthTransactionPolicy');
+    const lastOauthRegistrationIndex = names.indexOf('oauthStarterController');
+
+    assert.isAtLeast(firstOauthRegistrationIndex, 0);
+    assert.isAtLeast(lastOauthRegistrationIndex, 0);
+    assert.isAbove(lastOauthRegistrationIndex, firstOauthRegistrationIndex);
+
+    let previousInfrastructureIndex = -1;
+    for (const infrastructureName of infrastructureNames) {
+      const index = names.indexOf(infrastructureName);
+      assert.isAtLeast(index, 0, `missing infrastructure registration: ${infrastructureName}`);
+      assert.isBelow(index, firstOauthRegistrationIndex, `${infrastructureName} should remain before oauth registrations`);
+      assert.isAbove(index, previousInfrastructureIndex, `${infrastructureName} order should match auth-hono starter order`);
+      previousInfrastructureIndex = index;
+    }
+
+    let previousLegacyControllerIndex = lastOauthRegistrationIndex;
+    for (const controllerName of legacyControllerNames) {
+      const index = names.indexOf(controllerName);
+      assert.isAtLeast(index, 0, `missing legacy controller registration: ${controllerName}`);
+      assert.isAbove(index, lastOauthRegistrationIndex, `${controllerName} should remain after oauth registrations`);
+      assert.isAbove(index, previousLegacyControllerIndex, `${controllerName} order should match auth-hono starter order`);
+      previousLegacyControllerIndex = index;
+    }
   });
 
   it('keeps default config pass-through bindings for applications + auth.jwt.secret', () => {
