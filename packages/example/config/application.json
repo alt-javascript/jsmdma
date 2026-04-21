@@ -1,0 +1,17 @@
+{
+  "boot": {
+    "banner-mode": "off",
+    "nosql": {
+      "url": "jsnosqlc:memory:"
+    }
+  },
+  "logging": {
+    "level": {
+      "ROOT": "error"
+    }
+  },
+  "server": {
+    "port": 0
+  },
+  "orgs": {}
+}

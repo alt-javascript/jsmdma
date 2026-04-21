@@ -18,10 +18,23 @@ npm install @alt-javascript/jsmdma-auth-server
 
 | Class | Role |
 |---|---|
-| `UserRepository` | Persists user records and provider index (`provider:id → userId`). |
-| `AuthService` | OAuth callback handling — upserts users, signs JWT sessions, manages provider linking and unlinking. |
+| `UserRepository` | Persists user profiles; `providers` is synchronized projection state (ownership authority is `oauthIdentityLinkStore`). |
+| `AuthService` | OAuth callback handling via `oauthIdentityLinkStore` ownership (`getUserByProviderAnchor`, `link`, `getLinksForUser`) with typed conflict/state outcomes. |
 | `OrgRepository` | Persists org records, name reservations, and membership. |
 | `OrgService` | Org lifecycle — create, add/remove/update members, role validation, last-admin guard. |
+
+## Identity-link authority and failure contract
+
+Runtime ownership authority is the injected `oauthIdentityLinkStore`; this package does not treat user-profile provider arrays as ownership indexes.
+
+Typical typed oauth outcomes surfaced to route layers:
+
+- `identity_link_conflict` (for example `reason=anchor_already_linked`)
+- `identity_link_not_found` (for example `reason=provider_not_linked`)
+- `last_provider_unlink_forbidden` (for example `reason=last_provider_lockout`)
+- `invalid_state` for malformed callback/dependency-state paths
+
+These codes/reasons are intended for machine handling while preserving non-leaky messages.
 
 ## CDI Assembly
 

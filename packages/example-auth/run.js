@@ -1,49 +1,30 @@
 /**
- * run.js — Auth lifecycle example
+ * run.js — Split-flow oauth + mode-aware auth lifecycle walkthrough
  *
- * Demonstrates the complete M002 authentication layer:
+ * Demonstrates the canonical split-flow contract:
  *
- *   1. Boot CDI context with mock OAuth providers
- *   2. First login → new UUID issued, JWT returned
- *   3. GET /auth/me → user identity confirmed
- *   4. POST /:application/sync with JWT → authenticated sync succeeds
- *   5. Rolling refresh → X-Auth-Token header emitted for near-expiry token
- *   6. Link a second provider → providers list updated
- *   7. Unlink the first provider → one provider remains
- *   8. Attempt to unlink last provider → 409 (correctly rejected)
- *   9. Use an expired token → 401 with reason: idle
- *  10. Exit 0
- *
- * Uses Hono's app.request() for request simulation — no TCP port needed.
+ *   1. GET /oauth/:provider/authorize + GET /oauth/:provider/callback
+ *      (success, replay, malformed input, unsupported provider)
+ *   2. GET /auth/:provider + POST /auth/login/finalize (mode=bearer)
+ *   3. GET /auth/me with bearer token
+ *   4. POST /auth/link/finalize + DELETE /auth/unlink/:provider
+ *   5. POST /auth/signout and stale-session rejection on /auth/me
+ *   6. GET /auth/:provider + POST /auth/login/finalize (mode=session alias)
+ *   7. GET /auth/me with cookie session + cookie signout invalidation
  *
  * Run:
  *   node packages/example-auth/run.js
  */
 
-import '@alt-javascript/jsnosqlc-memory';
-import { Context, ApplicationContext } from '@alt-javascript/cdi';
-import { EphemeralConfig } from '@alt-javascript/config';
-import { honoStarter } from '@alt-javascript/boot-hono';
-import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
 import {
-  SyncRepository,
-  SyncService,
-  AppSyncService,
-  ApplicationRegistry,
-  SchemaValidator,
-} from '@alt-javascript/jsmdma-server';
-import { AppSyncController } from '@alt-javascript/jsmdma-hono';
-import { authHonoStarter } from '@alt-javascript/jsmdma-auth-hono';
-import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
-import { SignJWT } from 'jose';
+  AUTH_ONLY_BOOT_OAUTH_GOOGLE_CLIENT_ID,
+  BOOT_OAUTH_GOOGLE_REDIRECT_URI,
+  buildAuthOnlyStarterApp,
+} from './runtime/authStarterRuntime.js';
 
 // ── constants ─────────────────────────────────────────────────────────────────
 
 const JWT_SECRET = 'example-auth-secret-must-be-32-chars!!';
-const APPLICATION_NAME = 'todo';
-const APPLICATIONS_CONFIG = {
-  [APPLICATION_NAME]: {},
-};
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -55,7 +36,7 @@ function assert(condition, message) {
 }
 
 function banner(text) {
-  const line = '─'.repeat(60);
+  const line = '─'.repeat(68);
   console.log(`\n${line}`);
   console.log(`  ${text}`);
   console.log(line);
@@ -63,312 +44,361 @@ function banner(text) {
 
 function print(label, value) {
   const val = typeof value === 'object' ? JSON.stringify(value) : value;
-  console.log(`  ${label.padEnd(24)} ${val}`);
+  console.log(`  ${label.padEnd(30)} ${val}`);
+}
+
+function encode(value) {
+  return encodeURIComponent(value ?? '');
+}
+
+function extractStateFromLocation(location) {
+  const parsed = new URL(location, 'https://oauth.local');
+  return parsed.searchParams.get('state');
+}
+
+async function expectJson(res, label) {
+  const body = await res.json().catch(() => null);
+  assert(body && typeof body === 'object', `${label} returned malformed JSON envelope`);
+  return body;
+}
+
+async function expectTypedError(res, { status, code, reason }, label) {
+  assert(res.status === status, `${label} should return ${status}, got ${res.status}`);
+  const body = await expectJson(res, label);
+  assert(body.code === code, `${label} should return code=${code}, got ${body.code}`);
+  if (reason !== undefined) {
+    assert(body.reason === reason, `${label} should return reason=${reason}, got ${body.reason}`);
+  }
+  return body;
+}
+
+function extractCookieValue(setCookie, name) {
+  if (typeof setCookie !== 'string' || setCookie.length === 0) return null;
+  const first = setCookie.split(';')[0] ?? '';
+  const [cookieName, rawValue] = first.split('=');
+  if (!cookieName || cookieName.trim() !== name) return null;
+  return decodeURIComponent(rawValue ?? '');
 }
 
 // ── mock OAuth providers ──────────────────────────────────────────────────────
 
 class MockProvider {
   constructor(providerUserId, email) {
-    this._uid   = providerUserId;
+    this._uid = providerUserId;
     this._email = email;
   }
+
   createAuthorizationURL(state) {
     return new URL(`https://mock.provider/auth?state=${state}`);
   }
+
   async validateCallback() {
     return { providerUserId: this._uid, email: this._email };
   }
 }
 
-// ── craft an expired token for expiry test ────────────────────────────────────
+// ── lifecycle helpers ─────────────────────────────────────────────────────────
 
-async function craftExpiredToken(sub, providers) {
-  const key = new TextEncoder().encode(JWT_SECRET);
-  const idleExpiredIat = Math.floor(Date.now() / 1000) - (3 * 24 * 60 * 60 + 60); // 3d + 1min ago
-  return new SignJWT({ sub, providers, iat_session: idleExpiredIat })
-    .setProtectedHeader({ alg: 'HS256' })
-    .setIssuedAt(idleExpiredIat)
-    .setSubject(sub)
-    .sign(key);
+async function beginAuth(app, provider, query = '') {
+  const res = await app.request(`/auth/${provider}${query}`);
+  assert(res.status === 200, `begin auth should return 200, got ${res.status}`);
+  const body = await expectJson(res, `begin auth (${provider})`);
+  assert(typeof body.state === 'string' && body.state.length > 0, 'begin auth should return non-empty state');
+  return body;
 }
 
-// ── craft a near-expiry token for refresh test ────────────────────────────────
-
-async function craftRefreshableToken(sub, providers, email) {
-  const key    = new TextEncoder().encode(JWT_SECRET);
-  const oldIat = Math.floor(Date.now() / 1000) - (60 * 60 + 60); // 1h + 1min ago
-  return new SignJWT({ sub, providers, email, iat_session: oldIat })
-    .setProtectedHeader({ alg: 'HS256' })
-    .setIssuedAt(oldIat)
-    .setSubject(sub)
-    .sign(key);
+async function loginFinalize(app, { provider, state, mode }) {
+  const res = await app.request(
+    `/auth/login/finalize?provider=${encode(provider)}&code=mock-code&state=${encode(state)}&mode=${encode(mode)}`,
+    { method: 'POST' },
+  );
+  assert(res.status === 200, `login finalize should return 200, got ${res.status}`);
+  return expectJson(res, `login finalize (${provider}, mode=${mode})`);
 }
 
-// ── CDI context ───────────────────────────────────────────────────────────────
-
-async function buildContext(providers) {
-  const config = new EphemeralConfig({
-    'boot':         { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
-    'logging':      { level: { ROOT: 'error' } },
-    'server':       { port: 0 },
-    'auth':         { jwt: { secret: JWT_SECRET } },
-    'applications': APPLICATIONS_CONFIG,
-    'orgs':         { registerable: false },
-  });
-
-  const context = new Context([
-    ...honoStarter(),
-    ...jsnosqlcAutoConfiguration(),
-    { Reference: SyncRepository, name: 'syncRepository', scope: 'singleton' },
-    { Reference: SyncService, name: 'syncService', scope: 'singleton' },
-    { Reference: AppSyncService, name: 'appSyncService', scope: 'singleton' },
+async function linkFinalize(app, { token, provider, state }) {
+  const res = await app.request(
+    `/auth/link/finalize?provider=${encode(provider)}&code=mock-code&state=${encode(state)}&stored_state=${encode(state)}&code_verifier=`,
     {
-      Reference: ApplicationRegistry,
-      name: 'applicationRegistry',
-      scope: 'singleton',
-      properties: [{ name: 'applications', path: 'applications' }],
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
     },
-    {
-      Reference: SchemaValidator,
-      name: 'schemaValidator',
-      scope: 'singleton',
-      properties: [{ name: 'applications', path: 'applications' }],
-    },
-    ...authHonoStarter(),
-    { Reference: AppSyncController, name: 'appSyncController', scope: 'singleton' },
-  ]);
-
-  const appCtx = new ApplicationContext({ contexts: [context], config });
-  await appCtx.start({ run: false });
-  await appCtx.get('nosqlClient').ready();
-
-  appCtx.get('authController').providers = providers;
-
-  return { app: appCtx.get('honoAdapter').app, appCtx };
+  );
+  assert(res.status === 200, `link finalize should return 200, got ${res.status}`);
+  return expectJson(res, `link finalize (${provider})`);
 }
 
-// ── helper: login/link flow for in-process request simulation ───────────────
-
-function encode(value) {
-  return encodeURIComponent(value ?? '');
-}
-
-async function completeAuthCallback(app, providerName, state) {
-  const callbackUrl = `/auth/${providerName}/callback?code=mock&state=${encode(state)}`;
-  const res = await app.request(callbackUrl);
-  assert(res.status === 302, `callback should return 302, got ${res.status}`);
-}
-
-async function login(app, repo, providerName, providerUserId) {
-  const beginRes = await app.request(`/auth/${providerName}`);
-  assert(beginRes.status === 200, `begin auth should return 200, got ${beginRes.status}`);
-
-  const { state } = await beginRes.json();
-  await completeAuthCallback(app, providerName, state);
-
-  const userRecord = await repo.findByProvider(providerName, providerUserId);
-  assert(userRecord, `provider login should create/find user for ${providerName}:${providerUserId}`);
-
-  const providers = userRecord.providers.map((p) => p.provider);
-  const token = await JwtSession.sign({
-    sub: userRecord.userId,
-    providers,
-    email: userRecord.email ?? null,
-  }, JWT_SECRET);
-
-  return {
-    token,
-    user: {
-      userId: userRecord.userId,
-      email: userRecord.email ?? null,
-      providers,
-    },
-  };
-}
-
-async function beginLink(app, providerName, token) {
-  const beginRes = await app.request(`/auth/${providerName}?link=true`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  assert(beginRes.status === 200, `begin link should return 200, got ${beginRes.status}`);
-
-  const { state } = await beginRes.json();
-
-  return {
-    code: 'mock',
-    state,
-    codeVerifier: '',
-  };
-}
-
-// ── main ─────────────────────────────────────────────────────────────────────
+// ── main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  banner('jsmdma — Auth Lifecycle Example');
+  banner('jsmdma — Split-flow oauth + mode-aware auth lifecycle example');
 
-  const { app, appCtx } = await buildContext({
-    github: new MockProvider('gh-user-1', 'alice@github.com'),
-    google: new MockProvider('google-user-1', 'alice@google.com'),
+  const { app } = await buildAuthOnlyStarterApp({
+    jwtSecret: JWT_SECRET,
+    providers: {
+      github: new MockProvider('gh-user-1', 'alice@github.com'),
+      google: new MockProvider('google-user-1', 'alice@google.com'),
+    },
   });
-  const repo = appCtx.get('userRepository');
 
-  console.log('\n  ✓ CDI context ready (mock providers: github, google)');
+  console.log('\n  ✓ Boot-first starter context ready (mock providers: github, google)');
 
-  // ── Step 1: First login ────────────────────────────────────────────────────
+  // ── Step 1: boot oauth route contract checks ───────────────────────────────
 
-  banner('Step 1: First login via GitHub');
+  banner('Step 1: /oauth authorize+callback (success, replay, malformed, unsupported)');
 
-  const { user: u1, token: token1 } = await login(app, repo, 'github', 'gh-user-1');
+  const oauthAuthorizeRes = await app.request('/oauth/google/authorize?mode=cookie');
+  assert(oauthAuthorizeRes.status === 302, `oauth authorize should return 302, got ${oauthAuthorizeRes.status}`);
 
-  assert(u1.userId.length === 36, 'userId should be a UUID');
-  assert(u1.providers.length === 1, 'should have 1 provider');
-  assert(u1.providers[0] === 'github', 'provider should be github');
-
-  print('User UUID:', u1.userId);
-  print('Email:', u1.email);
-  print('Providers:', u1.providers);
-  print('JWT (first 40):', token1.slice(0, 40) + '...');
-  console.log('\n  ✓ New UUID assigned');
-
-  // ── Step 2: GET /auth/me ───────────────────────────────────────────────────
-
-  banner('Step 2: GET /auth/me — verify identity');
-
-  const meRes  = await app.request('/auth/me', {
-    headers: { Authorization: `Bearer ${token1}` },
-  });
-  assert(meRes.status === 200, `/auth/me should return 200, got ${meRes.status}`);
-  const me = await meRes.json();
-
-  assert(me.userId === u1.userId, 'userId should match');
-  print('userId:', me.userId);
-  print('email:', me.email);
-  print('providers:', me.providers);
-  console.log('\n  ✓ Identity confirmed');
-
-  // ── Step 3: Authenticated POST /:application/sync ─────────────────────────
-
-  banner(`Step 3: POST /${APPLICATION_NAME}/sync with JWT`);
-
-  const syncRes = await app.request(`/${APPLICATION_NAME}/sync`, {
-    method:  'POST',
-    body:    JSON.stringify({ collection: 'notes', clientClock: '0000000000000-000000-00000000', changes: [] }),
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token1}` },
-  });
-  assert(syncRes.status === 200, `/${APPLICATION_NAME}/sync should return 200, got ${syncRes.status}`);
-  const syncBody = await syncRes.json();
-  print('serverClock:', syncBody.serverClock);
-
-  const malformedSyncRes = await app.request(`/${APPLICATION_NAME}/sync`, {
-    method: 'POST',
-    body: JSON.stringify({ clientClock: '0000000000000-000000-00000000', changes: [] }),
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token1}` },
-  });
-  assert(malformedSyncRes.status === 400, `malformed /${APPLICATION_NAME}/sync should return 400, got ${malformedSyncRes.status}`);
-
-  const unknownAppSyncRes = await app.request('/unknown-app/sync', {
-    method: 'POST',
-    body: JSON.stringify({ collection: 'notes', clientClock: '0000000000000-000000-00000000', changes: [] }),
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token1}` },
-  });
-  assert(unknownAppSyncRes.status === 404, `unknown app sync should return 404, got ${unknownAppSyncRes.status}`);
-
-  console.log('\n  ✓ Authenticated app-scoped sync succeeded; malformed/unknown-app checks passed');
-
-  // ── Step 4: Rolling refresh ────────────────────────────────────────────────
-
-  banner('Step 4: Rolling refresh — token near expiry');
-
-  const oldToken = await craftRefreshableToken(u1.userId, ['github'], u1.email);
-  const refreshRes = await app.request('/auth/me', {
-    headers: { Authorization: `Bearer ${oldToken}` },
-  });
-  assert(refreshRes.status === 200, `should still be valid: ${refreshRes.status}`);
-  const newToken = refreshRes.headers.get('x-auth-token');
-  assert(newToken != null, 'X-Auth-Token header should be present');
-  const newPayload = await JwtSession.verify(newToken, JWT_SECRET);
-
-  print('Old token iat (h ago):', `~${Math.floor((Date.now()/1000 - 3660) / 3600)}h`);
-  print('New token iat (now):', 'fresh');
-  print('iat_session preserved:', newPayload.iat_session < Math.floor(Date.now() / 1000));
-  console.log('\n  ✓ Rolling refresh: X-Auth-Token header emitted, iat_session preserved');
-
-  // ── Step 5: Link second provider ──────────────────────────────────────────
-
-  banner('Step 5: Link Google as second provider');
-
-  const { code, state, codeVerifier } = await beginLink(app, 'google', token1);
-
-  const linkRes = await app.request(
-    `/auth/link/google?code=${encode(code)}&state=${encode(state)}&stored_state=${encode(state)}&code_verifier=${encode(codeVerifier)}`,
-    { method: 'POST', headers: { Authorization: `Bearer ${token1}` } },
+  const oauthLocation = oauthAuthorizeRes.headers.get('location');
+  assert(typeof oauthLocation === 'string' && oauthLocation.length > 0, 'oauth authorize should return Location header');
+  assert(oauthLocation.includes('state='), 'oauth authorize Location should include state query parameter');
+  assert(oauthLocation.includes(`client_id=${AUTH_ONLY_BOOT_OAUTH_GOOGLE_CLIENT_ID}`), 'oauth authorize should include configured client id');
+  assert(
+    oauthLocation.includes(`redirect_uri=${encodeURIComponent(BOOT_OAUTH_GOOGLE_REDIRECT_URI)}`),
+    'oauth authorize should include configured callback redirect URI',
   );
-  assert(linkRes.status === 200, `link should return 200, got ${linkRes.status}`);
-  const { user: linked } = await linkRes.json();
 
-  assert(linked.providers.length === 2, 'should have 2 providers after link');
-  assert(linked.userId === u1.userId, 'UUID should be unchanged');
-  print('Providers after link:', linked.providers.map(p => p.provider).sort());
-  console.log('\n  ✓ Google linked; UUID unchanged');
+  const oauthSetCookie = oauthAuthorizeRes.headers.get('set-cookie');
+  assert(typeof oauthSetCookie === 'string' && oauthSetCookie.toLowerCase().includes('oauth_provider=google'), 'oauth authorize should preserve oauth_provider Set-Cookie');
 
-  // ── Step 6: Unlink GitHub ─────────────────────────────────────────────────
+  const oauthState = extractStateFromLocation(oauthLocation);
+  assert(typeof oauthState === 'string' && oauthState.length > 0, 'oauth authorize should issue non-empty state token');
 
-  banner('Step 6: Unlink GitHub (still has Google)');
+  await expectTypedError(
+    await app.request('/oauth/google/callback?code=missing-state-code'),
+    {
+      status: 400,
+      code: 'invalid_state',
+      reason: 'non_empty_string_required',
+    },
+    'GET /oauth/google/callback missing state',
+  );
 
-  const unlinkRes = await app.request('/auth/providers/github', {
+  await expectTypedError(
+    await app.request('/oauth/google/callback?state=missing-code-state'),
+    {
+      status: 400,
+      code: 'invalid_state',
+      reason: 'non_empty_string_required',
+    },
+    'GET /oauth/google/callback missing code',
+  );
+
+  await expectTypedError(
+    await app.request('/oauth/linkedin/authorize'),
+    {
+      status: 400,
+      code: 'invalid_state',
+      reason: 'unsupported_provider',
+    },
+    'GET /oauth/linkedin/authorize',
+  );
+
+  const oauthAcceptedRes = await app.request(`/oauth/google/callback?state=${encode(oauthState)}&code=oauth-code-first`);
+  assert(oauthAcceptedRes.status === 200, `oauth callback first consume should return 200, got ${oauthAcceptedRes.status}`);
+  const oauthAccepted = await expectJson(oauthAcceptedRes, 'GET /oauth/google/callback first consume');
+  assert(oauthAccepted.code === 'oauth_callback_accepted', `oauth callback success should return code=oauth_callback_accepted, got ${oauthAccepted.code}`);
+  assert(oauthAccepted.provider === 'google', `oauth callback success should return provider=google, got ${oauthAccepted.provider}`);
+
+  await expectTypedError(
+    await app.request(`/oauth/google/callback?state=${encode(oauthState)}&code=oauth-code-replay`),
+    {
+      status: 409,
+      code: 'replay_detected',
+      reason: 'replay_detected',
+    },
+    'GET /oauth/google/callback replay',
+  );
+
+  print('oauth state issued:', oauthState.slice(0, 12) + '…');
+  console.log('\n  ✓ Boot oauth authorize/callback contract is deterministic');
+
+  // ── Step 2: login finalize (bearer mode) ───────────────────────────────────
+
+  banner('Step 2: GET /auth/:provider + POST /auth/login/finalize (bearer)');
+
+  const beginLogin = await beginAuth(app, 'github');
+  const loginBearer = await loginFinalize(app, {
+    provider: 'github',
+    state: beginLogin.state,
+    mode: 'bearer',
+  });
+
+  assert(loginBearer.mode === 'bearer', `expected bearer mode, got ${loginBearer.mode}`);
+  assert(typeof loginBearer.token === 'string' && loginBearer.token.length > 0, 'bearer login should return token');
+  assert(loginBearer.user?.userId, 'bearer login should return user payload');
+
+  print('userId:', loginBearer.user.userId);
+  print('providers:', loginBearer.user.providers.map((p) => p.provider));
+  print('mode:', loginBearer.mode);
+  console.log('\n  ✓ Bearer login finalized');
+
+  // ── Step 3: /auth/me + mode mismatch negative ──────────────────────────────
+
+  banner('Step 3: GET /auth/me with bearer token + mismatch negative');
+
+  const meBearerRes = await app.request('/auth/me', {
+    headers: { Authorization: `Bearer ${loginBearer.token}` },
+  });
+  assert(meBearerRes.status === 200, `/auth/me should return 200, got ${meBearerRes.status}`);
+  const meBearer = await expectJson(meBearerRes, 'GET /auth/me (bearer)');
+
+  assert(meBearer.userId === loginBearer.user.userId, 'bearer /auth/me userId should match login userId');
+  assert(meBearer.mode === 'bearer', `expected /auth/me mode=bearer, got ${meBearer.mode}`);
+
+  const mismatchRes = await app.request('/auth/me?mode=cookie', {
+    headers: { Authorization: `Bearer ${loginBearer.token}` },
+  });
+  await expectTypedError(mismatchRes, {
+    status: 400,
+    code: 'invalid_state',
+    reason: 'session_mode_mismatch',
+  }, 'GET /auth/me mode mismatch');
+
+  print('/auth/me mode:', meBearer.mode);
+  console.log('\n  ✓ Bearer identity confirmed and mode mismatch is typed');
+
+  // ── Step 4: link finalize ───────────────────────────────────────────────────
+
+  banner('Step 4: Link second provider via /auth/link/finalize');
+
+  const beginLink = await beginAuth(app, 'google', '?link=true');
+  const linkResult = await linkFinalize(app, {
+    token: loginBearer.token,
+    provider: 'google',
+    state: beginLink.state,
+  });
+
+  const linkedProviders = (linkResult.user?.providers ?? []).map((p) => p.provider).sort();
+  assert(linkedProviders.length === 2, `expected 2 providers after link, got ${linkedProviders.length}`);
+  assert(linkedProviders[0] === 'github' && linkedProviders[1] === 'google', 'expected github + google after link');
+
+  print('providers after link:', linkedProviders);
+  console.log('\n  ✓ Link finalize succeeded with deterministic projection');
+
+  // ── Step 5: unlink + lockout guard ─────────────────────────────────────────
+
+  banner('Step 5: DELETE /auth/unlink/:provider + last-provider lockout reason');
+
+  const unlinkGithubRes = await app.request('/auth/unlink/github', {
     method: 'DELETE',
-    headers: { Authorization: `Bearer ${token1}` },
+    headers: { Authorization: `Bearer ${loginBearer.token}` },
   });
-  assert(unlinkRes.status === 200, `unlink should return 200, got ${unlinkRes.status}`);
-  const { providers: remaining } = await unlinkRes.json();
+  assert(unlinkGithubRes.status === 200, `unlink github should return 200, got ${unlinkGithubRes.status}`);
+  const unlinkGithubBody = await expectJson(unlinkGithubRes, 'DELETE /auth/unlink/github');
 
-  assert(remaining.length === 1, 'should have 1 provider after unlink');
-  assert(remaining[0].provider === 'google', 'remaining provider should be google');
-  print('Providers after unlink:', remaining.map(p => p.provider));
-  console.log('\n  ✓ GitHub unlinked; Google remains');
+  const remaining = (unlinkGithubBody.providers ?? []).map((p) => p.provider);
+  assert(remaining.length === 1 && remaining[0] === 'google', 'google should remain after unlink github');
 
-  // ── Step 7: 409 on last provider ─────────────────────────────────────────
-
-  banner('Step 7: Attempt to unlink last provider (Google)');
-
-  const lastUnlinkRes = await app.request('/auth/providers/google', {
+  const lockoutRes = await app.request('/auth/unlink/google', {
     method: 'DELETE',
-    headers: { Authorization: `Bearer ${token1}` },
+    headers: { Authorization: `Bearer ${loginBearer.token}` },
   });
-  assert(lastUnlinkRes.status === 409, `should return 409, got ${lastUnlinkRes.status}`);
-  const { error } = await lastUnlinkRes.json();
-  print('Response:', error);
-  console.log('\n  ✓ Last provider rejection: 409 returned correctly');
+  await expectTypedError(lockoutRes, {
+    status: 409,
+    code: 'last_provider_unlink_forbidden',
+    reason: 'last_provider_lockout',
+  }, 'DELETE /auth/unlink/google lockout');
 
-  // ── Step 8: Expired token ────────────────────────────────────────────────
+  print('remaining providers:', remaining);
+  console.log('\n  ✓ Unlink and last-provider lockout typed reason verified');
 
-  banner('Step 8: Expired token → 401');
+  // ── Step 6: bearer signout + stale-session rejection ───────────────────────
 
-  const expiredToken = await craftExpiredToken(u1.userId, ['google']);
-  const expiredRes   = await app.request('/auth/me', {
-    headers: { Authorization: `Bearer ${expiredToken}` },
+  banner('Step 6: POST /auth/signout (bearer) + stale /auth/me token');
+
+  const signoutBearerRes = await app.request('/auth/signout', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${loginBearer.token}` },
   });
-  assert(expiredRes.status === 401, `should return 401, got ${expiredRes.status}`);
-  const expiredBody = await expiredRes.json();
-  assert(expiredBody.reason === 'idle', `should have reason=idle, got ${expiredBody.reason}`);
-  print('Status:', expiredRes.status);
-  print('Reason:', expiredBody.reason);
-  console.log('\n  ✓ Expired token correctly rejected with reason=idle');
+  assert(signoutBearerRes.status === 200, `signout bearer should return 200, got ${signoutBearerRes.status}`);
+  const signoutBearerBody = await expectJson(signoutBearerRes, 'POST /auth/signout (bearer)');
+  assert(signoutBearerBody.mode === 'bearer', `signout bearer should report mode=bearer, got ${signoutBearerBody.mode}`);
 
-  // ── Summary ───────────────────────────────────────────────────────────────
+  const staleBearerMeRes = await app.request('/auth/me', {
+    headers: { Authorization: `Bearer ${loginBearer.token}` },
+  });
+  await expectTypedError(staleBearerMeRes, {
+    status: 401,
+    code: 'invalid_state',
+    reason: 'session_not_found',
+  }, 'GET /auth/me with stale bearer token');
+
+  console.log('\n  ✓ Signout invalidates bearer session token deterministically');
+
+  // ── Step 7: cookie mode alias + cookie signout invalidation ────────────────
+
+  banner('Step 7: login finalize mode=session alias + cookie session lifecycle');
+
+  const beginCookieLogin = await beginAuth(app, 'github');
+  const loginCookie = await loginFinalize(app, {
+    provider: 'github',
+    state: beginCookieLogin.state,
+    mode: 'session', // alias -> cookie
+  });
+
+  assert(loginCookie.mode === 'cookie', `mode=session should normalize to cookie, got ${loginCookie.mode}`);
+  assert(!loginCookie.token, 'cookie login should not return token in body');
+
+  const finalizeCookieRes = await app.request(
+    `/auth/login/finalize?provider=github&code=mock-code&state=${encode(beginCookieLogin.state)}&mode=session`,
+    { method: 'POST' },
+  );
+  assert(finalizeCookieRes.status === 400, 'replaying same state should fail');
+  const replayBody = await expectJson(finalizeCookieRes, 'POST /auth/login/finalize replay');
+  assert(replayBody.code === 'invalid_state', `replay should return invalid_state, got ${replayBody.code}`);
+  assert(replayBody.reason === 'unknown_state', `replay should return reason=unknown_state, got ${replayBody.reason}`);
+
+  const beginCookieLogin2 = await beginAuth(app, 'github');
+  const cookieFinalizeRes = await app.request(
+    `/auth/login/finalize?provider=github&code=mock-code&state=${encode(beginCookieLogin2.state)}&mode=session`,
+    { method: 'POST' },
+  );
+  assert(cookieFinalizeRes.status === 200, `cookie finalize should return 200, got ${cookieFinalizeRes.status}`);
+  const cookieFinalizeBody = await expectJson(cookieFinalizeRes, 'cookie login finalize');
+  assert(cookieFinalizeBody.mode === 'cookie', 'cookie finalize should report cookie mode');
+
+  const setCookie = cookieFinalizeRes.headers.get('set-cookie');
+  const cookieToken = extractCookieValue(setCookie, 'auth_session');
+  assert(cookieToken, 'cookie finalize should set auth_session cookie');
+
+  const meCookieRes = await app.request('/auth/me?mode=cookie', {
+    headers: { Cookie: `auth_session=${encodeURIComponent(cookieToken)}` },
+  });
+  assert(meCookieRes.status === 200, `cookie /auth/me should return 200, got ${meCookieRes.status}`);
+  const meCookie = await expectJson(meCookieRes, 'GET /auth/me (cookie)');
+  assert(meCookie.mode === 'cookie', `expected cookie mode on /auth/me, got ${meCookie.mode}`);
+
+  const signoutCookieRes = await app.request('/auth/signout?mode=cookie', {
+    method: 'POST',
+    headers: { Cookie: `auth_session=${encodeURIComponent(cookieToken)}` },
+  });
+  assert(signoutCookieRes.status === 200, `cookie signout should return 200, got ${signoutCookieRes.status}`);
+  const signoutCookieBody = await expectJson(signoutCookieRes, 'POST /auth/signout (cookie)');
+  assert(signoutCookieBody.mode === 'cookie', `cookie signout should report mode=cookie, got ${signoutCookieBody.mode}`);
+
+  const staleCookieMeRes = await app.request('/auth/me?mode=cookie', {
+    headers: { Cookie: `auth_session=${encodeURIComponent(cookieToken)}` },
+  });
+  await expectTypedError(staleCookieMeRes, {
+    status: 401,
+    code: 'invalid_state',
+    reason: 'session_not_found',
+  }, 'GET /auth/me with stale cookie token');
+
+  console.log('\n  ✓ Cookie mode/session alias lifecycle verified');
+
+  // ── Summary ─────────────────────────────────────────────────────────────────
 
   banner('Result');
-  console.log('\n  ✓ First login → new UUID assigned');
-  console.log('  ✓ GET /auth/me → identity confirmed');
-  console.log(`  ✓ POST /${APPLICATION_NAME}/sync → authenticated request succeeds`);
-  console.log('  ✓ Sync boundary guards → malformed body=400, unknown app=404');
-  console.log('  ✓ Rolling refresh → X-Auth-Token emitted, iat_session preserved');
-  console.log('  ✓ Provider link → second provider added, UUID unchanged');
-  console.log('  ✓ Provider unlink → first provider removed');
-  console.log('  ✓ Last provider protection → 409 on unlink attempt');
-  console.log('  ✓ Expired token → 401 with reason=idle');
-  console.log('\n  All assertions passed. Auth lifecycle working correctly.\n');
+  console.log('\n  ✓ /oauth authorize+callback success, malformed guards, and replay detection');
+  console.log('  ✓ login finalize (bearer) → /auth/me (bearer)');
+  console.log('  ✓ link finalize → unlink with typed last_provider_lockout guard');
+  console.log('  ✓ signout rejects stale bearer/cookie sessions with session_not_found');
+  console.log('  ✓ mode=session alias normalizes to cookie and works end-to-end');
+  console.log('  ✓ replay and mode mismatch return deterministic typed reasons');
+  console.log('\n  All assertions passed. Split-flow oauth and auth lifecycle are working correctly.\n');
 }
 
 main().catch((err) => {

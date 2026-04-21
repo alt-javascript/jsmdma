@@ -50,6 +50,44 @@ const context = new Context([
 ]);
 ```
 
+## Canonical Starter Composition (`jsmdmaHonoStarter`)
+
+`jsmdmaHonoStarter()` is the canonical auth-enabled composer for jsmdma Hono apps.
+
+Internally it takes `authHonoStarter()` registrations and applies the explicit auth boundary API from `@alt-javascript/jsmdma-auth-hono`:
+
+- `infrastructureRegistrations` (auth middleware + typed error contract layer)
+- `legacyControllerRegistrations` (`AuthController`, `OrgController`)
+
+Composition order is deterministic:
+
+1. `honoStarter()` + `jsnosqlcAutoConfiguration()` infrastructure
+2. jsmdma sync services (`SyncRepository`, `SyncService`, `AppSyncService`, registry/validator)
+3. auth `infrastructureRegistrations`
+4. boot oauth foundation (`oauthJsnosqlcStarter()`, `oauthStarter()`)
+5. auth `legacyControllerRegistrations`
+6. `AppSyncController`
+
+This boundary-aware ordering preserves middleware-before-routes guarantees while exposing boot oauth routes (`/oauth/:provider/authorize`, `/oauth/:provider/callback`) on the canonical starter path.
+
+Feature closures are still enforced:
+
+- `features.auth=false` excludes both auth and oauth stacks.
+- `features.sync=true` requires `features.auth=true`.
+
+### Focused composition proof matrix
+
+Run this matrix when validating canonical composition or diagnosing auth-boundary drift:
+
+```bash
+npx mocha --recursive packages/jsmdma-auth-hono/test/authHonoStarter.spec.js
+npx mocha --recursive packages/jsmdma-hono/test/jsmdmaHonoStarter.spec.js
+npx mocha --recursive packages/jsmdma-hono/test/oauthStarterRoutes.spec.js
+npx mocha --recursive packages/example-auth/test/runLocalStarter.spec.js
+npx mocha --recursive packages/example-auth/test/runCanonicalStarter.spec.js
+node packages/example-auth/run.js
+```
+
 ## Further Reading
 
 - [Sync Protocol Reference](../../docs/sync-protocol.md)

@@ -169,20 +169,40 @@ Source: `packages/auth-server/UserRepository.js`
 }
 ```
 
-### ProviderLink
+### OAuthIdentityAnchor
 
-Collection: `providerIndex` | Key: `{provider}:{providerUserId}`  
-Source: `packages/auth-server/UserRepository.js`
+Collection: `oauth_identity_anchor_index` | Key: `{provider}:{providerUserId}`  
+Source: `@alt-javascript/boot-oauth-jsnosqlc` (`JsnosqlcOAuthIdentityLinkStore`)
 
-A lookup index: given a provider + providerUserId, resolves to a `userId` without scanning all users.
+Canonical provider-anchor ownership index. Given `{provider, providerUserId}`, resolves the owning `userId` without scanning users.
 
 ```json
 {
+  "anchor": "provider:providerUserId",
+  "userId": "uuid",
+  "provider": "string",
+  "providerUserId": "string",
+  "createdAt": 1713577465123
+}
+```
+
+### OAuthIdentityProviderLink
+
+Collection: `oauth_identity_provider_index` | Key: `{userId}:{provider}`  
+Source: `@alt-javascript/boot-oauth-jsnosqlc` (`JsnosqlcOAuthIdentityLinkStore`)
+
+Per-user provider link index used to list linked providers and enforce typed conflict/lockout flows.
+
+```json
+{
+  "anchor": "provider:providerUserId",
   "userId": "uuid",
   "provider": "string",
   "providerUserId": "string"
 }
 ```
+
+> `User.providers` remains a synchronized projection in `users`; ownership authority lives in `oauthIdentityLinkStore`.
 
 ### Org
 
@@ -310,7 +330,8 @@ return `${encode(userId)}:${encode(application)}:${encode(collection)}`;
 | Personal document storage | `{userId}:{app}:{collection}` | `{docKey}` within collection | `packages/server/namespaceKey.js` |
 | Org-scoped document storage | `org:{orgId}:{app}:{collection}` | `{docKey}` within collection | `packages/hono/AppSyncController.js` |
 | User record | `users` | `{userId}` | `packages/auth-server/UserRepository.js` |
-| Provider identity link | `providerIndex` | `{provider}:{providerUserId}` | `packages/auth-server/UserRepository.js` |
+| OAuth identity anchor ownership index | `oauth_identity_anchor_index` | `{provider}:{providerUserId}` | `@alt-javascript/boot-oauth-jsnosqlc` |
+| OAuth user-provider link index | `oauth_identity_provider_index` | `{userId}:{provider}` | `@alt-javascript/boot-oauth-jsnosqlc` |
 | Org record | `orgs` | `{orgId}` | `packages/auth-server/OrgRepository.js` |
 | Org membership | `orgMembers` | `{orgId}:{userId}` | `packages/auth-server/OrgRepository.js` |
 | Org name uniqueness index | `orgNames` | `{name}` | Designed: M007/S04 |
@@ -439,7 +460,7 @@ Requires JWT authentication. Cascades through all personal data:
 
 1. For each configured app: fetch docIndex entries via `listByUser`, group by collection, delete all personal documents, delete all docIndex entries
 2. Remove all org membership records (from every org the user belongs to)
-3. Remove all OAuth provider index entries (`{provider}:{providerUserId}` keys)
+3. Remove all OAuth identity-link index entries (anchor ownership + per-user provider projection rows)
 4. Delete the user identity record
 
 Returns `204` (no body) on success.

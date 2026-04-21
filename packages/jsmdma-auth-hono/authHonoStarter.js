@@ -1,5 +1,11 @@
 /**
- * authHonoStarter.js — CDI registration bundle for the jsmdma auth stack.
+ * authHonoStarter.js — low-level CDI registration bundle for the jsmdma auth stack.
+ *
+ * Canonical composition for auth-enabled jsmdma Hono apps is
+ * `jsmdmaHonoStarter()` from `@alt-javascript/jsmdma-hono`.
+ *
+ * Use `authHonoStarter()` only for advanced/compatibility composition where you
+ * must wire auth infrastructure manually.
  *
  * Usage:
  *   import { authHonoStarter } from '@alt-javascript/jsmdma-auth-hono';
@@ -11,6 +17,15 @@
  *     // sync controllers after auth:
  *     { Reference: AppSyncController, name: 'appSyncController', scope: 'singleton' },
  *   ]);
+ *
+ * Advanced boundary composition:
+ *   import {
+ *     authHonoStarter,
+ *     splitAuthHonoStarterRegistrations,
+ *   } from '@alt-javascript/jsmdma-auth-hono';
+ *
+ *   const { infrastructureRegistrations, legacyControllerRegistrations } =
+ *     splitAuthHonoStarterRegistrations(authHonoStarter());
  *
  * After appCtx.start(), set OAuth provider instances on authController:
  *   appCtx.get('authController').providers = {
@@ -33,6 +48,15 @@ import FrameworkErrorContractMiddleware from './FrameworkErrorContractMiddleware
 import AuthMiddlewareRegistrar from './AuthMiddlewareRegistrar.js';
 import AuthController          from './AuthController.js';
 import OrgController           from './OrgController.js';
+
+export const legacyAuthHonoControllerNames = Object.freeze(['authController', 'orgController']);
+
+const requiredAuthHonoInfrastructureNames = Object.freeze([
+  'frameworkErrorContractMiddleware',
+  'authMiddlewareRegistrar',
+]);
+
+const legacyAuthHonoControllerNameSet = new Set(legacyAuthHonoControllerNames);
 
 export function authHonoStarter() {
   return [
@@ -67,7 +91,12 @@ export function authHonoStarter() {
     },
 
     // Controllers — route handlers registered after middleware
-    { Reference: AuthController, name: 'authController', scope: 'singleton' },
+    {
+      Reference: AuthController,
+      name: 'authController',
+      scope: 'singleton',
+      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }],
+    },
     {
       Reference: OrgController,
       name:      'orgController',
@@ -75,4 +104,73 @@ export function authHonoStarter() {
       properties: [{ name: 'registerable', path: 'orgs.registerable' }],
     },
   ];
+}
+
+export function splitAuthHonoStarterRegistrations(registrations = authHonoStarter()) {
+  if (!Array.isArray(registrations)) {
+    throw new TypeError('[authHonoStarter] splitAuthHonoStarterRegistrations(registrations) expects an array');
+  }
+
+  const seenNames = new Set();
+  const duplicateNames = new Set();
+  const infrastructureRegistrations = [];
+  const legacyControllerRegistrations = [];
+
+  registrations.forEach((registration, idx) => {
+    if (!registration || typeof registration !== 'object' || Array.isArray(registration)) {
+      throw new TypeError(
+        `[authHonoStarter] registrations[${idx}] must be a registration object with a string name`,
+      );
+    }
+
+    const { name } = registration;
+    if (typeof name !== 'string' || name.trim().length === 0) {
+      throw new TypeError(
+        `[authHonoStarter] registrations[${idx}] must include a non-empty string name`,
+      );
+    }
+
+    if (seenNames.has(name)) {
+      duplicateNames.add(name);
+    } else {
+      seenNames.add(name);
+    }
+
+    if (legacyAuthHonoControllerNameSet.has(name)) {
+      legacyControllerRegistrations.push(registration);
+      return;
+    }
+
+    infrastructureRegistrations.push(registration);
+  });
+
+  if (duplicateNames.size > 0) {
+    throw new Error(
+      `[authHonoStarter] Duplicate registration name(s) detected: ${[...duplicateNames].join(', ')}`,
+    );
+  }
+
+  const missingLegacyControllers = legacyAuthHonoControllerNames.filter((name) => !seenNames.has(name));
+  if (missingLegacyControllers.length > 0) {
+    throw new Error(
+      `[authHonoStarter] Missing required legacy auth controller registration(s): ${missingLegacyControllers.join(', ')}`,
+    );
+  }
+
+  const missingInfrastructureRegistrations = requiredAuthHonoInfrastructureNames
+    .filter((name) => !infrastructureRegistrations.some((registration) => registration.name === name));
+  if (missingInfrastructureRegistrations.length > 0) {
+    throw new Error(
+      `[authHonoStarter] Missing required infrastructure registration(s): ${missingInfrastructureRegistrations.join(', ')}`,
+    );
+  }
+
+  if (infrastructureRegistrations.length === 0) {
+    throw new Error('[authHonoStarter] Infrastructure registration group is empty');
+  }
+
+  return {
+    infrastructureRegistrations,
+    legacyControllerRegistrations,
+  };
 }

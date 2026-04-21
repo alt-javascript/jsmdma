@@ -14,5 +14,15 @@ export {
 } from './FrameworkErrorContractMiddleware.js';
 export { default as AuthController } from './AuthController.js';
 export { default as AuthMiddlewareRegistrar } from './AuthMiddlewareRegistrar.js';
+export {
+  createSessionModeError,
+  normalizeSessionModeLiteral,
+  resolveSessionMode,
+  sessionModeAliases,
+} from './sessionModeContract.js';
 export { default as OrgController } from './OrgController.js';
-export { authHonoStarter } from './authHonoStarter.js';
+export {
+  authHonoStarter,
+  legacyAuthHonoControllerNames,
+  splitAuthHonoStarterRegistrations,
+} from './authHonoStarter.js';

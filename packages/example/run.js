@@ -20,12 +20,9 @@
  *   node packages/example/run.js
  */
 
-import '@alt-javascript/jsnosqlc-memory';
-import { Context, ApplicationContext } from '@alt-javascript/cdi';
-import { EphemeralConfig } from '@alt-javascript/config';
-import { jsmdmaHonoStarter } from '@alt-javascript/jsmdma-hono';
 import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 import { HLC } from '@alt-javascript/jsmdma-core';
+import { buildSharedNotesStarterApp } from './runtime/sharedNotesStarterApp.js';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -132,28 +129,10 @@ async function main() {
 
   // ── 1. Start CDI context ──────────────────────────────────────────────────
 
-  const APPLICATIONS_CONFIG = {
-    [APPLICATION]: { description: 'Shared notes application (example)' },
-  };
-
-  const config = new EphemeralConfig({
-    'boot':         { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
-    'logging':      { level: { ROOT: 'error' } },
-    'server':       { port: 0 },
-    'auth':         { jwt: { secret: JWT_SECRET } },
-    'applications': APPLICATIONS_CONFIG,
-    'orgs':         { registerable: false },
+  const { app, appCtx } = await buildSharedNotesStarterApp({
+    jwtSecret: JWT_SECRET,
   });
 
-  const context = new Context([
-    ...jsmdmaHonoStarter(),
-  ]);
-
-  const appCtx = new ApplicationContext({ contexts: [context], config });
-  await appCtx.start({ run: false });
-  await appCtx.get('nosqlClient').ready();
-
-  const app = appCtx.get('honoAdapter').app;
   console.log('\n  ✓ Hono server ready (CDI, in-memory NoSQL, auth middleware)');
 
   // Mint JWT tokens — same user ID on two devices (the canonical offline-first scenario)

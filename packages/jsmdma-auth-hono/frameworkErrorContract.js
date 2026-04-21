@@ -93,6 +93,11 @@ export function defaultErrorMessageForStatus(status, statusText) {
 function resolveErrorMessage({ status, body, statusText }) {
   if (isPlainObject(body)) {
     if (hasNonEmptyString(body.error)) return body.error.trim();
+
+    if (isPlainObject(body.error) && hasNonEmptyString(body.error.message)) {
+      return body.error.message.trim();
+    }
+
     if (hasNonEmptyString(body.message)) return body.message.trim();
   }
 
@@ -112,6 +117,10 @@ function resolveErrorMessage({ status, body, statusText }) {
 function resolveErrorCode({ status, body }) {
   if (isPlainObject(body) && hasNonEmptyString(body.code)) {
     return body.code.trim();
+  }
+
+  if (isPlainObject(body) && isPlainObject(body.error) && hasNonEmptyString(body.error.code)) {
+    return body.error.code.trim();
   }
 
   return defaultErrorCodeForStatus(status);
@@ -143,12 +152,18 @@ export function normalizeFrameworkErrorBody(input = {}) {
     code,
   };
 
+  const nestedError = isPlainObject(body) && isPlainObject(body.error) ? body.error : null;
+
   if (isPlainObject(body) && Object.prototype.hasOwnProperty.call(body, 'reason') && body.reason !== undefined) {
     envelope.reason = body.reason;
+  } else if (nestedError && Object.prototype.hasOwnProperty.call(nestedError, 'reason') && nestedError.reason !== undefined) {
+    envelope.reason = nestedError.reason;
   }
 
   if (isPlainObject(body) && Object.prototype.hasOwnProperty.call(body, 'details') && body.details !== undefined) {
     envelope.details = body.details;
+  } else if (nestedError && Object.prototype.hasOwnProperty.call(nestedError, 'diagnostics') && nestedError.diagnostics !== undefined) {
+    envelope.details = nestedError.diagnostics;
   }
 
   return envelope;

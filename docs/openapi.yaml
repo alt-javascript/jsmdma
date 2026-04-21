@@ -254,7 +254,7 @@ paths:
         - All personal synced documents across every configured application and collection
         - All docIndex entries owned by the user
         - All org membership records
-        - All OAuth provider index entries
+        - All OAuth identity-link index entries (anchor ownership + per-user provider projection)
         - The user identity record
 
         This operation is **irreversible**. Export data first via `GET /account/export`
@@ -275,46 +275,104 @@ paths:
 
   /auth/me:
     get:
-      summary: Get current user identity
-      description: Returns the authenticated user's identity decoded from the JWT.
+      summary: Get current user identity from mode-aware session resolution
+      description: |
+        Resolves the current session from bearer token or auth cookie.
+
+        Session mode can be explicit via `mode` query (`cookie|bearer` plus aliases
+        `session|stateless`) or inferred from credentials. When both credential types
+        are present without explicit mode, the endpoint fails closed with
+        `code=invalid_state` and `reason=session_mode_mismatch`.
       operationId: getMe
       tags: [auth]
+      parameters:
+        - name: mode
+          in: query
+          required: false
+          description: Optional explicit session mode (`cookie`, `bearer`, `session`, `stateless`)
+          schema:
+            type: string
+            enum: [cookie, bearer, session, stateless]
       responses:
         '200':
-          description: Current user identity
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UserIdentity'
-        '401':
-          description: Unauthorized — no valid JWT
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
-  /auth/logout:
-    post:
-      summary: Logout guidance
-      description: |
-        Returns stateless logout guidance. JWTs are stateless — there is no
-        server-side session to invalidate. The client should delete its stored token.
-      operationId: logout
-      tags: [auth]
-      security: []
-      responses:
-        '200':
-          description: Logout guidance message
+          description: Current user identity plus resolved session mode
           content:
             application/json:
               schema:
                 type: object
                 properties:
+                  userId:
+                    type: string
+                    format: uuid
+                  email:
+                    type: ['string', 'null']
+                  providers:
+                    type: array
+                    items:
+                      type: string
+                  mode:
+                    type: string
+                    enum: [cookie, bearer]
+                required: [userId, providers, mode]
+        '401':
+          description: Session missing/not found/expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '400':
+          description: Invalid explicit mode or mode/credential mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/signout:
+    post:
+      summary: Sign out current mode-aware session
+      description: |
+        Signs out the currently resolved session mode (`cookie` or `bearer`).
+
+        - Cookie mode clears the `auth_session` cookie.
+        - Bearer mode returns guidance to discard the client token.
+
+        Subsequent reuse of the signed-out token returns typed
+        `invalid_state/session_not_found` on lifecycle endpoints.
+      operationId: signout
+      tags: [auth]
+      security: []
+      parameters:
+        - name: mode
+          in: query
+          required: false
+          description: Optional explicit session mode (`cookie`, `bearer`, `session`, `stateless`)
+          schema:
+            type: string
+            enum: [cookie, bearer, session, stateless]
+      responses:
+        '200':
+          description: Signout accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  signedOut:
+                    type: boolean
+                  mode:
+                    type: string
+                    enum: [cookie, bearer]
                   message:
                     type: string
-                required: [message]
+                required: [signedOut, mode, message]
+        '401':
+          description: Session required or not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '400':
-          description: Bad request
+          description: Invalid explicit mode
           content:
             application/json:
               schema:
@@ -328,8 +386,12 @@ paths:
         Returns the authorization URL and state parameter.
         The PKCE code verifier is stored server-side and is not exposed in the
         public begin-auth response payload.
-        The client should redirect the user to `authorizationURL`, then call
-        `GET /auth/{provider}/callback` with the returned `code` and `state`.
+
+        For login completion, call `GET|POST /auth/login/finalize` with
+        `provider`, `code`, `state`, and explicit `mode`.
+
+        For provider-link completion, call `GET|POST /auth/link/finalize` with
+        `provider`, `code`, `state`, and `stored_state` while authenticated.
       operationId: beginAuth
       tags: [auth]
       security: []
@@ -370,18 +432,16 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
-  /auth/{provider}/callback:
+  /auth/login/finalize:
     get:
-      summary: Complete OAuth flow
-      description: |
-        Completes the OAuth authorization code flow. All parameters are passed as
-        query parameters (not request body). Returns a JWT token on success.
-      operationId: completeAuth
+      summary: Finalize OAuth login (query-mode)
+      description: Finalizes OAuth login with query parameters. Equivalent to POST variant.
+      operationId: loginFinalizeGet
       tags: [auth]
       security: []
       parameters:
         - name: provider
-          in: path
+          in: query
           required: true
           description: OAuth provider name (e.g. github, google)
           schema:
@@ -396,60 +456,93 @@ paths:
         - name: state
           in: query
           required: true
-          description: State parameter returned by the OAuth provider
+          description: State parameter returned by begin-auth
           schema:
             type: string
-        - name: stored_state
+        - name: mode
           in: query
           required: true
-          description: State value originally generated by the server (from beginAuth)
+          description: Explicit session mode (`cookie|bearer` plus aliases `session|stateless`)
           schema:
             type: string
-        - name: code_verifier
-          in: query
-          required: false
-          description: PKCE code verifier (required for PKCE flows)
-          schema:
-            type: string
+            enum: [cookie, bearer, session, stateless]
       responses:
         '200':
-          description: Authentication successful — returns user and JWT token
+          description: Login finalized
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  user:
-                    $ref: '#/components/schemas/UserIdentity'
-                  token:
-                    type: string
-                    description: JWT bearer token
-                required: [user, token]
+                $ref: '#/components/schemas/LoginFinalizeResponse'
         '400':
-          description: Missing query params or state mismatch
+          description: Missing/invalid query params or unknown OAuth state
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
-          description: Provider error or authentication failure
+          description: Provider/dependency failure
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
-  /auth/link/{provider}:
     post:
-      summary: Link an additional OAuth provider
+      summary: Finalize OAuth login (body/query mixed)
+      description: Finalizes OAuth login. Inputs are accepted from query/body using the same contract.
+      operationId: loginFinalizePost
+      tags: [auth]
+      security: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                provider:
+                  type: string
+                code:
+                  type: string
+                state:
+                  type: string
+                mode:
+                  type: string
+                  enum: [cookie, bearer, session, stateless]
+      responses:
+        '200':
+          description: Login finalized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginFinalizeResponse'
+        '400':
+          description: Missing/invalid input or unknown OAuth state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Provider/dependency failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/link/finalize:
+    get:
+      summary: Finalize provider link (query-mode)
       description: |
-        Links an additional OAuth provider to the authenticated user's identity.
-        All OAuth callback parameters are passed as query parameters (not request body).
-        Returns 409 if the provider account is already linked to another user.
-      operationId: linkProvider
+        Finalizes provider linking for the authenticated session.
+        Ownership is resolved via `oauthIdentityLinkStore`.
+
+        Returns typed oauth envelopes for deterministic failure paths:
+        - `identity_link_conflict` + `anchor_already_linked` when anchor belongs to another user
+        - `invalid_state` reasons for callback/state/session contract failures
+      operationId: linkFinalizeGet
       tags: [auth]
       parameters:
         - name: provider
-          in: path
+          in: query
           required: true
           description: OAuth provider name (e.g. github, google)
           schema:
@@ -464,13 +557,13 @@ paths:
         - name: state
           in: query
           required: true
-          description: State parameter returned by the OAuth provider
+          description: Callback state
           schema:
             type: string
         - name: stored_state
           in: query
           required: true
-          description: State value originally generated by the server
+          description: Expected state (must match `state`)
           schema:
             type: string
         - name: code_verifier
@@ -479,6 +572,13 @@ paths:
           description: PKCE code verifier
           schema:
             type: string
+        - name: mode
+          in: query
+          required: false
+          description: Optional explicit session mode (`cookie|bearer|session|stateless`)
+          schema:
+            type: string
+            enum: [cookie, bearer, session, stateless]
       responses:
         '200':
           description: Provider linked successfully
@@ -489,40 +589,121 @@ paths:
                 properties:
                   user:
                     $ref: '#/components/schemas/UserIdentity'
-                required: [user]
+                  mode:
+                    type: string
+                    enum: [cookie, bearer]
+                required: [user, mode]
         '400':
-          description: Missing query params, state mismatch, or unknown provider
+          description: Missing/invalid params, state mismatch, or unsupported provider
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
-          description: Authentication required
+          description: Session required/not found
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: Provider account already linked to another user
+          description: Provider anchor conflict (`code=identity_link_conflict`, reason such as `anchor_already_linked`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Dependency timeout (`code=invalid_state`, `reason=dependency_timeout`)
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
-          description: Provider error
+          description: Provider/dependency failure
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
-  /auth/providers/{provider}:
+    post:
+      summary: Finalize provider link (body/query mixed)
+      description: Finalizes provider linking. Inputs are accepted from query/body using the same contract.
+      operationId: linkFinalizePost
+      tags: [auth]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                provider:
+                  type: string
+                code:
+                  type: string
+                state:
+                  type: string
+                stored_state:
+                  type: string
+                code_verifier:
+                  type: string
+                mode:
+                  type: string
+                  enum: [cookie, bearer, session, stateless]
+      responses:
+        '200':
+          description: Provider linked successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/UserIdentity'
+                  mode:
+                    type: string
+                    enum: [cookie, bearer]
+                required: [user, mode]
+        '400':
+          description: Missing/invalid params or state mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Session required/not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Provider anchor conflict (`code=identity_link_conflict`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Dependency timeout (`code=invalid_state`, `reason=dependency_timeout`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Provider/dependency failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/unlink/{provider}:
     delete:
       summary: Unlink an OAuth provider
       description: |
         Removes an OAuth provider from the authenticated user's identity.
-        Returns 409 if this is the user's only remaining provider (unlinking would
-        lock the user out of their account).
-      operationId: unlinkProvider
+        Ownership and lockout checks are enforced by `oauthIdentityLinkStore`.
+        Returns typed oauth envelopes for deterministic failure paths:
+        - `identity_link_not_found` + `provider_not_linked` when the provider is not linked
+        - `last_provider_unlink_forbidden` + `last_provider_lockout` when unlink would lock the user out
+      operationId: unlinkProviderDelete
       tags: [auth]
       parameters:
         - name: provider
@@ -532,6 +713,13 @@ paths:
           schema:
             type: string
             example: github
+        - name: mode
+          in: query
+          required: false
+          description: Optional explicit session mode (`cookie|bearer|session|stateless`)
+          schema:
+            type: string
+            enum: [cookie, bearer, session, stateless]
       responses:
         '200':
           description: Provider unlinked — returns updated providers list
@@ -550,21 +738,85 @@ paths:
                         providerUserId:
                           type: string
                       required: [provider, providerUserId]
-                required: [providers]
+                  mode:
+                    type: string
+                    enum: [cookie, bearer]
+                required: [providers, mode]
         '401':
-          description: Authentication required
+          description: Session required/not found
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
-          description: User not found
+          description: Provider link not found (`code=identity_link_not_found`, `reason=provider_not_linked`)
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '409':
-          description: Cannot remove last provider
+          description: Last-provider lockout prevented (`code=last_provider_unlink_forbidden`, `reason=last_provider_lockout`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    post:
+      summary: Unlink an OAuth provider (POST alias)
+      description: POST alias of DELETE `/auth/unlink/{provider}` for client compatibility.
+      operationId: unlinkProviderPost
+      tags: [auth]
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          description: OAuth provider name to remove (e.g. github, google)
+          schema:
+            type: string
+            example: github
+        - name: mode
+          in: query
+          required: false
+          description: Optional explicit session mode (`cookie|bearer|session|stateless`)
+          schema:
+            type: string
+            enum: [cookie, bearer, session, stateless]
+      responses:
+        '200':
+          description: Provider unlinked — returns updated providers list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        provider:
+                          type: string
+                        providerUserId:
+                          type: string
+                      required: [provider, providerUserId]
+                  mode:
+                    type: string
+                    enum: [cookie, bearer]
+                required: [providers, mode]
+        '401':
+          description: Session required/not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Provider link not found (`code=identity_link_not_found`, `reason=provider_not_linked`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Last-provider lockout prevented (`code=last_provider_unlink_forbidden`, `reason=last_provider_lockout`)
           content:
             application/json:
               schema:
@@ -1231,12 +1483,56 @@ components:
   schemas:
     ErrorResponse:
       type: object
-      description: Standard error response body
+      description: |
+        Framework-normalized error response body.
+
+        Non-5xx oauth failures include deterministic machine-readable fields:
+        - `code` (for example `identity_link_conflict`, `identity_link_not_found`, `last_provider_unlink_forbidden`, `invalid_state`)
+        - `reason` (for example `anchor_already_linked`, `provider_not_linked`, `last_provider_lockout`, `state_mismatch`, `session_required`, `session_not_found`, `session_mode_mismatch`)
+        - optional `details` for structured diagnostics
       properties:
         error:
           type: string
           description: Human-readable error message
+        code:
+          type: string
+          description: Machine-readable error code
+        reason:
+          type: string
+          description: Machine-readable reason qualifier (typically present on 4xx oauth outcomes)
+        details:
+          type: object
+          additionalProperties: true
+          description: Optional structured diagnostics for non-5xx typed failures
       required: [error]
+
+    LoginFinalizeResponse:
+      type: object
+      description: |
+        Response envelope for `GET|POST /auth/login/finalize`.
+
+        - Bearer mode returns `token` + `user`.
+        - Cookie mode returns `user` and sets session cookie; `token` may be omitted.
+      properties:
+        token:
+          type: string
+          description: JWT bearer token (present for bearer mode)
+        user:
+          $ref: '#/components/schemas/UserIdentity'
+        mode:
+          type: string
+          enum: [cookie, bearer]
+        session:
+          type: object
+          properties:
+            mode:
+              type: string
+              enum: [cookie, bearer]
+            source:
+              type: string
+            explicitMode:
+              type: boolean
+      required: [user, mode]
 
     UserIdentity:
       type: object

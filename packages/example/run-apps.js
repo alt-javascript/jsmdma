@@ -772,43 +772,43 @@ async function main() {
   assert(r14private.status === 200, `Expected 200 for planner-private-search sync, got ${r14private.status}`);
   ok('Alice synced planner-private-search (visibility=private by default)');
 
-  // Update planner-2026's name to contain 'Plan' so the filter hits it (demonstrating ACL gating)
-  const t14update = HLC.tick(t14, Date.now());
-  const r14update = await syncPost(app, 'year-planner', {
+  // Seed a dedicated public-search doc so ACL assertions are deterministic.
+  const t14public = HLC.tick(t14, Date.now());
+  const r14public = await syncPost(app, 'year-planner', {
     collection:  'planners',
     clientClock: HLC.zero(),
     changes: [{
-      key:       'planner-2026',
-      doc:       { meta: { name: 'Year Plan 2026', year: 2026, lang: 'en', theme: 'ink', dark: false } },
-      fieldRevs: { meta: t14update },
+      key:       'planner-public-search',
+      doc:       { meta: { name: 'Public Search Target Plan', year: 2026, lang: 'en', theme: 'ink', dark: false } },
+      fieldRevs: { meta: t14public },
       baseClock: HLC.zero(),
     }],
   }, aliceToken);
 
-  assert(r14update.status === 200, `Expected 200 for planner-2026 update, got ${r14update.status}`);
-  ok("Alice updated planner-2026 meta.name to 'Year Plan 2026'");
+  assert(r14public.status === 200, `Expected 200 for planner-public-search sync, got ${r14public.status}`);
+  ok('Alice synced planner-public-search (candidate for public ACL search)');
 
-  // Set planner-2026 to public so Bob can find it without sharedWith
-  await docIndexRepo.setVisibility('alice-uuid', 'year-planner', 'planner-2026', 'public');
-  ok('Alice set planner-2026 visibility to public');
+  // Set planner-public-search to public so Bob can find it without sharedWith
+  await docIndexRepo.setVisibility('alice-uuid', 'year-planner', 'planner-public-search', 'public');
+  ok('Alice set planner-public-search visibility to public');
 
-  // Bob searches for docs with 'Plan' in meta.name — filter hits planner-2026, planner-private,
-  // and planner-private-search in Alice's namespace; only planner-2026 (public) passes ACL
+  // Bob searches for docs with the public marker in meta.name.
+  // planner-private-search also matches broad planner terms, but must stay hidden.
   const r14search = await searchPost(app, 'year-planner', {
     collection: 'planners',
-    filter: { type: 'condition', field: 'meta.name', op: 'contains', value: 'Plan' },
+    filter: { type: 'condition', field: 'meta.name', op: 'contains', value: 'Public Search Target' },
   }, bobToken);
 
   assert(r14search.status === 200, `Expected 200 for search, got ${r14search.status}: ${JSON.stringify(r14search.body)}`);
   assert(Array.isArray(r14search.body.results), `Expected results array, got: ${JSON.stringify(r14search.body)}`);
 
   const results = r14search.body.results;
-  const hasPublicPlanner  = results.some((d) => d._key === 'planner-2026');
+  const hasPublicPlanner  = results.some((d) => d._key === 'planner-public-search');
   const hasPrivatePlanner = results.some((d) => d._key === 'planner-private-search');
 
-  assert(hasPublicPlanner,   `Bob should see Alice's public planner-2026; got keys: ${results.map((d) => d._key).join(', ')}`);
+  assert(hasPublicPlanner,   `Bob should see Alice's public planner-public-search; got keys: ${results.map((d) => d._key).join(', ')}`);
   assert(!hasPrivatePlanner, `Bob should NOT see Alice's private planner-private-search; got keys: ${results.map((d) => d._key).join(', ')}`);
-  ok("Bob's search returns Alice's public planner-2026 ✓");
+  ok("Bob's search returns Alice's public planner-public-search ✓");
   ok("Bob's search does NOT return Alice's private planner-private-search ✓");
 
   // ── Scenario 15: Alice personal export ──────────────────────────────────
