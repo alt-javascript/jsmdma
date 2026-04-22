@@ -137,6 +137,11 @@ describe('run-local starter entrypoint regressions (packages/example-auth)', () 
         assert.include([200, 204], preflight.status, 'Expected CORS preflight to be handled');
         assert.equal(preflight.headers.get('access-control-allow-origin'), 'http://localhost:8080');
         assert.include((preflight.headers.get('access-control-allow-methods') || '').toUpperCase(), 'POST');
+        assert.equal(
+          preflight.headers.get('access-control-allow-credentials'),
+          'true',
+          'Expected CORS preflight to advertise credentialed-request support so cookie-mode oauth fetches succeed',
+        );
 
         const oauthAuthorize = await app.request('/oauth/google/authorize?mode=cookie');
         assert.equal(oauthAuthorize.status, 302, 'Expected boot oauth authorize route to return redirect response');
