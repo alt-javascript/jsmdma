@@ -30,14 +30,14 @@
   "dependencies": {
     "@alt-javascript/jsmdma-server": "*",
     "@alt-javascript/jsmdma-auth-hono": "*",
-    "@alt-javascript/boot-hono": "file:../../../../../../boot/packages/boot-hono",
-    "@alt-javascript/boot-jsnosqlc": "file:../../../../../../boot/packages/boot-jsnosqlc",
-    "@alt-javascript/boot-oauth": "file:../../../../../../boot/packages/boot-oauth",
-    "@alt-javascript/boot-oauth-jsnosqlc": "file:../../../../../../boot/packages/boot-oauth-jsnosqlc",
+    "@alt-javascript/boot-hono": "file:../../../boot/packages/boot-hono",
+    "@alt-javascript/boot-jsnosqlc": "file:../../../boot/packages/boot-jsnosqlc",
+    "@alt-javascript/boot-oauth": "file:../../../boot/packages/boot-oauth",
+    "@alt-javascript/boot-oauth-jsnosqlc": "file:../../../boot/packages/boot-oauth-jsnosqlc",
     "@alt-javascript/jsnosqlc-core": "^1.0.1"
   },
   "devDependencies": {
-    "@alt-javascript/boot": "file:../../../../../../boot/packages/boot",
+    "@alt-javascript/boot": "file:../../../boot/packages/boot",
     "@alt-javascript/cdi": "3.0.7",
     "@alt-javascript/config": "3.0.7",
     "@alt-javascript/jsnosqlc-memory": "^1.0.1",

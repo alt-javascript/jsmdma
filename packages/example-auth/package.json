@@ -7,10 +7,10 @@
     "start": "node run.js"
   },
   "dependencies": {
-    "@alt-javascript/boot": "file:../../../../../../boot/packages/boot",
-    "@alt-javascript/boot-hono": "file:../../../../../../boot/packages/boot-hono",
-    "@alt-javascript/boot-jsnosqlc": "file:../../../../../../boot/packages/boot-jsnosqlc",
-    "@alt-javascript/boot-oauth": "file:../../../../../../boot/packages/boot-oauth",
+    "@alt-javascript/boot": "file:../../../boot/packages/boot",
+    "@alt-javascript/boot-hono": "file:../../../boot/packages/boot-hono",
+    "@alt-javascript/boot-jsnosqlc": "file:../../../boot/packages/boot-jsnosqlc",
+    "@alt-javascript/boot-oauth": "file:../../../boot/packages/boot-oauth",
     "@alt-javascript/cdi": "3.0.7",
     "@alt-javascript/config": "3.0.7",
     "@alt-javascript/jsmdma-auth-core": "*",
