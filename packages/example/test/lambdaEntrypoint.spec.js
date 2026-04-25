@@ -1,13 +1,14 @@
 import { assert } from 'chai';
-import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 import { HLC } from '@alt-javascript/jsmdma-core';
-import { FULL_STACK_JWT_SECRET } from '../runtime/fullStackStarterApp.js';
+import { OAuthSessionMiddleware } from '@alt-javascript/boot-oauth';
+import { buildFullStackStarterApp } from '../runtime/fullStackStarterApp.js';
 import { createLambdaHandlerForTests } from '../lambda-handler.js';
 import {
   buildApiGatewayV2Event,
   parseApiGatewayV2JsonResponse,
   expectTypedErrorEnvelope,
 } from './lambdaEventV2.js';
+import { mintTestToken, TestOAuthSessionEngine } from '../../jsmdma-hono/test/helpers/mintTestToken.js';
 
 function parseJsonWithContext(response, contextLabel) {
   try {
@@ -29,6 +30,19 @@ function assertTypedErrorWithContext(response, expected, contextLabel) {
       { cause: err },
     );
   }
+}
+
+function buildAuthStarterOptions() {
+  return {
+    starterOptions: {
+      hooks: {
+        beforeSync: [
+          { Reference: TestOAuthSessionEngine, name: 'oauthSessionEngine', scope: 'singleton' },
+          { Reference: OAuthSessionMiddleware,  name: 'oauthSessionMiddleware',  scope: 'singleton' },
+        ],
+      },
+    },
+  };
 }
 
 describe('lambda entrypoint adapter integration (packages/example)', () => {
@@ -56,11 +70,10 @@ describe('lambda entrypoint adapter integration (packages/example)', () => {
   }
 
   before(async () => {
-    runtime = await createLambdaHandlerForTests();
-    authToken = await JwtSession.sign(
-      { sub: 'lambda-entrypoint-user', providers: ['test'] },
-      FULL_STACK_JWT_SECRET,
-    );
+    runtime = await createLambdaHandlerForTests({
+      appBuilder: () => buildFullStackStarterApp(buildAuthStarterOptions()),
+    });
+    authToken = mintTestToken({ userId: 'lambda-entrypoint-user' });
   });
 
   after(async () => {
@@ -77,7 +90,7 @@ describe('lambda entrypoint adapter integration (packages/example)', () => {
     assert.deepEqual(parseJsonWithContext(response, 'health'), { status: 'ok' });
   });
 
-  it('keeps POST /todo/sync JWT-gated (401 unauthorized) on the Lambda adapter path', async () => {
+  it('keeps POST /todo/sync gated at 401 on the Lambda adapter path when no token is provided', async () => {
     const response = await invokeLambda({
       method: 'POST',
       path: '/todo/sync',
@@ -92,7 +105,7 @@ describe('lambda entrypoint adapter integration (packages/example)', () => {
     assertTypedErrorWithContext(response, {
       statusCode: 401,
       error: 'Unauthorized',
-      code: 'unauthorized',
+      code: 'session_required',
     }, 'todo-sync-unauth');
   });
 

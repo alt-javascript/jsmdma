@@ -5,10 +5,10 @@
  *   GET /account/export         — export all data for the authenticated user
  *   GET /orgs/:orgId/export     — export all data for an organisation
  *
- * Authentication is required on both routes.  The auth middleware
- * (AuthMiddlewareRegistrar) must be registered before this controller in the
- * CDI context, and AuthMiddlewareRegistrar.routes() must call
- * app.use('/account/*', mw) so the export route is protected.
+ * Authentication is required on both routes.  OAuthSessionMiddleware must
+ * be registered before this controller in the CDI context.  The identity
+ * is read from request.identity (set by OAuthSessionMiddleware); requests
+ * without a valid session token are rejected with 401.
  *
  * GET /account/export:
  *   Returns { user, docs, docIndex } via ExportService.exportUser(userId).
@@ -39,18 +39,16 @@ export default class ExportController {
 
   /**
    * GET /account/export
-   * @param {{ params: Object, honoCtx: import('hono').Context }} request
+   * @param {{ params: Object, identity: Object }} request
    */
   async exportUser(request) {
-    const { honoCtx } = request;
-
     // ── Auth guard ────────────────────────────────────────────────────────────
-    const userPayload = honoCtx?.get?.('user') ?? null;
-    if (!userPayload || !userPayload.sub) {
+    const userPayload = request.identity ?? null;
+    if (!userPayload || !userPayload.userId) {
       this.logger?.debug?.('[ExportController] 401 — missing or invalid user payload on /account/export');
       return { statusCode: 401, body: { error: 'Authentication required' } };
     }
-    const userId = userPayload.sub;
+    const userId = userPayload.userId;
 
     // ── Export ────────────────────────────────────────────────────────────────
     const envelope = await this.exportService.exportUser(userId);
@@ -67,18 +65,18 @@ export default class ExportController {
 
   /**
    * GET /orgs/:orgId/export
-   * @param {{ params: Object, honoCtx: import('hono').Context }} request
+   * @param {{ params: Object, identity: Object }} request
    */
   async exportOrg(request) {
-    const { params, honoCtx } = request;
+    const { params } = request;
 
     // ── Auth guard ────────────────────────────────────────────────────────────
-    const userPayload = honoCtx?.get?.('user') ?? null;
-    if (!userPayload || !userPayload.sub) {
+    const userPayload = request.identity ?? null;
+    if (!userPayload || !userPayload.userId) {
       this.logger?.debug?.('[ExportController] 401 — missing or invalid user payload on /orgs/:orgId/export');
       return { statusCode: 401, body: { error: 'Authentication required' } };
     }
-    const userId = userPayload.sub;
+    const userId = userPayload.userId;
     const orgId  = params?.orgId;
 
     // ── Org existence check ───────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 /**
- * jsmdmaHonoStarter.js — Canonical CDI registration bundle for jsmdma sync+auth on Hono.
+ * jsmdmaHonoStarter.js — Canonical CDI registration bundle for jsmdma sync+org on Hono.
  *
  * Usage:
  *   import { jsmdmaHonoStarter } from '@alt-javascript/jsmdma-hono';
@@ -8,8 +8,8 @@
  * Composition order is intentional:
  *   1) Hono + jsnosql boot infrastructure
  *   2) (optional) sync services and application/schema wiring
- *   3) (optional) auth stack foundation: auth-hono middleware + boot oauth registrations
- *   4) (optional) AppSyncController (must stay after auth middleware)
+ *   3) org services: OrgRepository, OrgService, FrameworkErrorContractMiddleware, OrgController
+ *   4) (optional) AppSyncController
  *
  * Advanced options are constrained to prevent impossible/wiring-unsafe combinations:
  *   - feature toggles are boolean-only and dependency-validated
@@ -17,31 +17,29 @@
  */
 import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
-import { oauthStarter } from '@alt-javascript/boot-oauth';
-import { oauthJsnosqlcStarter } from '@alt-javascript/boot-oauth-jsnosqlc';
 import {
   SyncRepository,
   SyncService,
   AppSyncService,
   ApplicationRegistry,
   SchemaValidator,
+  OrgRepository,
+  OrgService,
+  UserRepository,
 } from '@alt-javascript/jsmdma-server';
-import {
-  splitAuthHonoStarterRegistrations,
-} from '@alt-javascript/jsmdma-auth-hono';
 import AppSyncController from './AppSyncController.js';
+import OrgController from './OrgController.js';
+import FrameworkErrorContractMiddleware from './FrameworkErrorContractMiddleware.js';
 
 const ALLOWED_OPTION_KEYS = ['features', 'hooks'];
 const FEATURE_DEFAULTS = Object.freeze({
   configValidation: true,
   sync:             true,
-  auth:             true,
   appSyncController: true,
 });
 const ALLOWED_FEATURE_KEYS = Object.keys(FEATURE_DEFAULTS);
 const HOOK_STAGES = Object.freeze([
   'beforeSync',
-  'beforeAuth',
   'beforeAppSync',
   'afterAppSync',
 ]);
@@ -146,16 +144,8 @@ function normalizeFeatures(rawFeatures = {}) {
 
   const closureViolations = [];
 
-  if (normalized.sync && !normalized.auth) {
-    closureViolations.push('features.sync requires features.auth=true so /:application/sync remains protected by auth middleware');
-  }
-
   if (normalized.appSyncController && !normalized.sync) {
     closureViolations.push('features.appSyncController requires features.sync=true');
-  }
-
-  if (normalized.appSyncController && !normalized.auth) {
-    closureViolations.push('features.appSyncController requires features.auth=true');
   }
 
   if (closureViolations.length > 0) {
@@ -165,20 +155,15 @@ function normalizeFeatures(rawFeatures = {}) {
   return normalized;
 }
 
-function createConfigValidatorReference({ requireJwtSecret, requireApplications }) {
+function createConfigValidatorReference({ requireApplications }) {
   return class JsmdmaHonoStarterConfigValidator {
     constructor() {
-      this.jwtSecret    = null; // property-injected from auth.jwt.secret
       this.applications = null; // property-injected from applications
     }
 
     // Imperative routes() hook is invoked during Hono route registration at startup.
     // We use it as a fail-fast config guard before runtime traffic can hit endpoints.
     routes() {
-      if (requireJwtSecret && (typeof this.jwtSecret !== 'string' || this.jwtSecret.length < 32)) {
-        throw new Error('[jsmdmaHonoStarter] Missing or invalid config at auth.jwt.secret (expected string length >= 32)');
-      }
-
       if (requireApplications && (!this.applications || typeof this.applications !== 'object' || Array.isArray(this.applications))) {
         throw new Error('[jsmdmaHonoStarter] Missing or invalid config at applications (expected object map of app configs)');
       }
@@ -212,7 +197,7 @@ function assertUniqueRegistrationNames(registrations) {
 }
 
 /**
- * Build the canonical registration list for jsmdma sync+auth on Hono.
+ * Build the canonical registration list for jsmdma sync+org on Hono.
  *
  * @param {object} [options]
  * @param {object} [options.features] - boolean feature toggles for advanced composition.
@@ -242,17 +227,12 @@ export function jsmdmaHonoStarter(options = {}) {
   if (features.configValidation) {
     const validatorProperties = [];
 
-    if (features.auth) {
-      validatorProperties.push({ name: 'jwtSecret', path: 'auth.jwt.secret' });
-    }
-
     if (features.sync || features.appSyncController) {
       validatorProperties.push({ name: 'applications', path: 'applications' });
     }
 
     registrations.push({
       Reference: createConfigValidatorReference({
-        requireJwtSecret:    features.auth,
         requireApplications: features.sync || features.appSyncController,
       }),
       name: 'jsmdmaHonoStarterConfigValidator',
@@ -283,21 +263,18 @@ export function jsmdmaHonoStarter(options = {}) {
     );
   }
 
-  registrations.push(...hooks.beforeAuth);
-
-  if (features.auth) {
-    const {
-      infrastructureRegistrations,
-      legacyControllerRegistrations,
-    } = splitAuthHonoStarterRegistrations();
-
-    registrations.push(
-      ...infrastructureRegistrations,
-      ...oauthJsnosqlcStarter(),
-      ...oauthStarter(),
-      ...legacyControllerRegistrations,
-    );
-  }
+  registrations.push(
+    { Reference: UserRepository,                name: 'userRepository',                scope: 'singleton' },
+    { Reference: OrgRepository,                 name: 'orgRepository',                 scope: 'singleton' },
+    { Reference: OrgService,                    name: 'orgService',                    scope: 'singleton' },
+    { Reference: FrameworkErrorContractMiddleware, name: 'frameworkErrorContractMiddleware', scope: 'singleton' },
+    {
+      Reference:  OrgController,
+      name:       'orgController',
+      scope:      'singleton',
+      properties: [{ name: 'registerable', path: 'orgs.registerable' }],
+    },
+  );
 
   registrations.push(...hooks.beforeAppSync);
 

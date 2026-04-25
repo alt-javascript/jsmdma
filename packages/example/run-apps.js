@@ -17,13 +17,13 @@
  */
 
 import '@alt-javascript/jsnosqlc-memory';
-import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 import { HLC } from '@alt-javascript/jsmdma-core';
 import {
-  FULL_STACK_JWT_SECRET as JWT_SECRET,
   buildFullStackStarterApp as buildApp,
   buildFullStackStarterAppNoReg as buildAppNoReg,
 } from './runtime/fullStackStarterApp.js';
+import { OAuthSessionMiddleware } from '@alt-javascript/boot-oauth';
+import { mintTestToken, TestOAuthSessionEngine } from '../jsmdma-hono/test/helpers/mintTestToken.js';
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -46,6 +46,18 @@ function banner(text) {
 }
 
 // ── Shared starter composition ───────────────────────────────────────────────
+
+function withTestAuth() {
+  return {
+    hooks: {
+      beforeSync: [
+        { Reference: TestOAuthSessionEngine, name: 'oauthSessionEngine', scope: 'singleton' },
+        { Reference: OAuthSessionMiddleware, name: 'oauthSessionMiddleware', scope: 'singleton' },
+      ],
+    },
+  };
+}
+
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
 
 async function orgPost(app, body, token) {
@@ -118,15 +130,15 @@ async function deleteReq(app, path, token) {
 async function main() {
   banner('jsmdma — Multi-App Example (M003 + M004)');
 
-  const { app, appCtx } = await buildApp();
+  const { app, appCtx } = await buildApp({ starterOptions: withTestAuth() });
   ok('Hono server ready (two applications: todo, shopping-list; org management enabled)');
 
   // Mint tokens for Alice and Bob
-  const aliceToken = await JwtSession.sign({ sub: 'alice-uuid', providers: ['demo'] }, JWT_SECRET);
-  const bobToken   = await JwtSession.sign({ sub: 'bob-uuid',   providers: ['demo'] }, JWT_SECRET);
+  const aliceToken = mintTestToken({ userId: 'alice-uuid' });
+  const bobToken   = mintTestToken({ userId: 'bob-uuid' });
   // Alice's two devices (same userId, two "instances")
   const aliceDeviceAToken = aliceToken;
-  const aliceDeviceBToken = await JwtSession.sign({ sub: 'alice-uuid', providers: ['demo'] }, JWT_SECRET);
+  const aliceDeviceBToken = mintTestToken({ userId: 'alice-uuid' });
 
   const t0 = HLC.tick(HLC.zero(), Date.now());
 
@@ -317,7 +329,7 @@ async function main() {
     });
   }
 
-  const carolToken = await JwtSession.sign({ sub: 'carol-uuid', providers: ['demo'] }, JWT_SECRET);
+  const carolToken = mintTestToken({ userId: 'carol-uuid' });
 
   // Alice creates an org; Bob is added as a member
   const { org } = await orgSvc.createOrg('alice-uuid', 'Example Team');
@@ -657,7 +669,7 @@ async function main() {
     updatedAt: new Date().toISOString(),
   });
 
-  const carolS12Token = await JwtSession.sign({ sub: 'carol-s12-uuid', providers: ['demo'] }, JWT_SECRET);
+  const carolS12Token = mintTestToken({ userId: 'carol-s12-uuid' });
 
   // (a) POST /orgs with registerable=true → 201
   const r12a = await orgPost(app, { name: 'scenario-12-org' }, carolS12Token);
@@ -672,7 +684,7 @@ async function main() {
 
   // (c) POST /orgs with registerable absent → 403
   // Build a separate minimal app with no orgs.registerable in config
-  const { app: appNoReg, appCtx: appCtxNoReg } = await buildAppNoReg();
+  const { app: appNoReg, appCtx: appCtxNoReg } = await buildAppNoReg({ starterOptions: withTestAuth() });
 
   // Seed a user in the no-reg app store so the JWT sub resolves
   const userRepoNoReg = appCtxNoReg.get('userRepository');
@@ -837,7 +849,7 @@ async function main() {
     email:     'carol-export@example.com',
     providers: ['demo'],
   });
-  const carolExportToken = await JwtSession.sign({ sub: 'carol-export-uuid', providers: ['demo'] }, JWT_SECRET);
+  const carolExportToken = mintTestToken({ userId: 'carol-export-uuid' });
 
   // Carol creates an org (auto-added as org-admin)
   const orgSvc16 = appCtx.get('orgService');

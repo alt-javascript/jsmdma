@@ -15,13 +15,9 @@ import {
   ExportService,
   DeletionService,
 } from '@alt-javascript/jsmdma-server';
-import { AuthMiddlewareRegistrar, OrgController } from '@alt-javascript/jsmdma-auth-hono';
-import { UserRepository, OrgRepository, OrgService } from '@alt-javascript/jsmdma-auth-server';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-
-export const FULL_STACK_JWT_SECRET = 'run-apps-jwt-secret-at-least-32chars!';
 
 export const FULL_STACK_PACKAGE_BASE_PATH = fileURLToPath(new URL('..', import.meta.url));
 export const FULL_STACK_PLANNER_SCHEMA_PATH = fileURLToPath(new URL('../schemas/planner.json', import.meta.url));
@@ -118,22 +114,7 @@ export const FULL_STACK_STARTER_OPTIONS = {
 export const NO_REG_ORG_ONLY_STARTER_OPTIONS = {
   features: {
     sync: false,
-    auth: false,
     appSyncController: false,
-  },
-  hooks: {
-    beforeSync: [
-      { Reference: UserRepository, name: 'userRepository', scope: 'singleton' },
-      { Reference: OrgRepository, name: 'orgRepository', scope: 'singleton' },
-      { Reference: OrgService, name: 'orgService', scope: 'singleton' },
-      {
-        Reference: AuthMiddlewareRegistrar,
-        name: 'authMiddlewareRegistrar',
-        scope: 'singleton',
-        properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }],
-      },
-      { Reference: OrgController, name: 'orgController', scope: 'singleton' },
-    ],
   },
 };
 
@@ -160,21 +141,14 @@ function mergeStarterOptions(baseOptions, overrides = {}) {
 }
 
 export function createFullStackConfig({
-  jwtSecret = FULL_STACK_JWT_SECRET,
   applicationsConfig = FULL_STACK_APPLICATIONS_CONFIG,
   includeOrgsRegisterable = true,
   orgsRegisterable = true,
 } = {}) {
-  const config = {
-    auth: { jwt: { secret: jwtSecret } },
+  return {
     applications: applicationsConfig,
+    orgs: { registerable: includeOrgsRegisterable ? orgsRegisterable : false },
   };
-
-  if (includeOrgsRegisterable) {
-    config.orgs = { registerable: orgsRegisterable };
-  }
-
-  return config;
 }
 
 export function createFullStackStarterOptions(overrides = {}) {
@@ -214,7 +188,6 @@ async function buildStarterApplicationContext({ config, starterOptions }) {
 }
 
 export async function buildFullStackStarterContext({
-  jwtSecret = FULL_STACK_JWT_SECRET,
   applicationsConfig = FULL_STACK_APPLICATIONS_CONFIG,
   orgsRegisterable = true,
   starterOptions = {},
@@ -223,7 +196,6 @@ export async function buildFullStackStarterContext({
   const config = loadFullStackConfig({
     basePath,
     overrides: createFullStackConfig({
-      jwtSecret,
       applicationsConfig,
       includeOrgsRegisterable: true,
       orgsRegisterable,
@@ -245,7 +217,6 @@ export async function buildFullStackStarterApp(options = {}) {
 }
 
 export async function buildFullStackStarterContextNoReg({
-  jwtSecret = FULL_STACK_JWT_SECRET,
   applicationsConfig = FULL_STACK_APPLICATIONS_CONFIG,
   starterOptions = {},
   basePath = FULL_STACK_PACKAGE_BASE_PATH,
@@ -253,7 +224,6 @@ export async function buildFullStackStarterContextNoReg({
   const config = loadFullStackConfig({
     basePath,
     overrides: createFullStackConfig({
-      jwtSecret,
       applicationsConfig,
       includeOrgsRegisterable: false,
     }),

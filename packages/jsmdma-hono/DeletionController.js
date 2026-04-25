@@ -5,9 +5,8 @@
  *   DELETE /account         — hard-delete the authenticated user account
  *   DELETE /orgs/:orgId     — hard-delete an organisation (org-admin only)
  *
- * Authentication is required on both routes.  The auth middleware
- * (AuthMiddlewareRegistrar) must be registered before this controller in the
- * CDI context.
+ * Authentication is required on both routes. OAuthSessionMiddleware must be
+ * registered before this controller in the CDI context.
  *
  * DELETE /account:
  *   Cascades through all synced docs, docIndex entries, org memberships, and
@@ -22,20 +21,16 @@
  *   org record via DeletionService.deleteOrg(orgId).
  *   Returns 204 on success.
  *
- * Uses the imperative routes() hook (instead of static __routes) because the
- * boot-hono HonoControllerRegistrar cannot produce a valid 204 No Content
- * response via the __routes + return-value path: the dispatch wrapper converts
- * null to { statusCode: 204 } and the outer code then calls c.json('', 204),
- * which the Fetch API Response constructor rejects for bodyless status codes.
- * The imperative hook calls c.body(null, 204) directly, which is correct.
- *
  * CDI autowiring (by name):
  *   this.deletionService — DeletionService instance
  *   this.orgRepository   — OrgRepository instance
  *   this.logger          — optional logger
  */
 export default class DeletionController {
-  // No static __routes — uses the imperative routes() hook for 204 support.
+  static __routes = [
+    { method: 'DELETE', path: '/account',     handler: 'deleteAccount' },
+    { method: 'DELETE', path: '/orgs/:orgId', handler: 'deleteOrg' },
+  ];
 
   constructor() {
     this.deletionService = null; // CDI autowired
@@ -44,55 +39,51 @@ export default class DeletionController {
   }
 
   /**
-   * Register DELETE /account and DELETE /orgs/:orgId directly on the Hono app.
-   * Called by HonoControllerRegistrar for components without __routes.
-   *
-   * @param {import('hono').Hono} app
+   * DELETE /account — hard-delete the authenticated user and all their data.
+   * Returns null (→ 204) on success.
    */
-  routes(app) {
-    const ctrl = this;
+  async deleteAccount(request) {
+    const identity = request.identity;
+    if (!identity?.userId) {
+      this.logger?.debug?.('[DeletionController] 401 — missing identity on DELETE /account');
+      return { statusCode: 401, body: { error: 'Authentication required' } };
+    }
+    const userId = identity.userId;
 
-    // ── DELETE /account ────────────────────────────────────────────────────
-    app.delete('/account', async (c) => {
-      const userPayload = c.get('user') ?? null;
-      if (!userPayload || !userPayload.sub) {
-        ctrl.logger?.debug?.('[DeletionController] 401 — missing or invalid user payload on DELETE /account');
-        return c.json({ error: 'Authentication required' }, 401);
-      }
-      const userId = userPayload.sub;
+    await this.deletionService.deleteUser(userId);
+    this.logger?.info?.(`[DeletionController] deleteUser userId=${userId}`);
 
-      await ctrl.deletionService.deleteUser(userId);
-      ctrl.logger?.info?.(`[DeletionController] deleteUser userId=${userId}`);
+    return null; // dispatch converts to { statusCode: 204 }
+  }
 
-      return c.body(null, 204);
-    });
+  /**
+   * DELETE /orgs/:orgId — hard-delete an organisation (org-admin only).
+   * Returns null (→ 204) on success.
+   */
+  async deleteOrg(request) {
+    const identity = request.identity;
+    if (!identity?.userId) {
+      this.logger?.debug?.('[DeletionController] 401 — missing identity on DELETE /orgs/:orgId');
+      return { statusCode: 401, body: { error: 'Authentication required' } };
+    }
+    const userId = identity.userId;
+    const orgId  = request.params?.orgId;
 
-    // ── DELETE /orgs/:orgId ────────────────────────────────────────────────
-    app.delete('/orgs/:orgId', async (c) => {
-      const userPayload = c.get('user') ?? null;
-      if (!userPayload || !userPayload.sub) {
-        ctrl.logger?.debug?.('[DeletionController] 401 — missing or invalid user payload on DELETE /orgs/:orgId');
-        return c.json({ error: 'Authentication required' }, 401);
-      }
-      const userId = userPayload.sub;
-      const orgId  = c.req.param('orgId');
+    const org = await this.orgRepository.getOrg(orgId);
+    if (!org) {
+      this.logger?.debug?.(`[DeletionController] 404 — orgId=${orgId} not found`);
+      return { statusCode: 404, body: { error: `Organisation not found: ${orgId}` } };
+    }
 
-      const org = await ctrl.orgRepository.getOrg(orgId);
-      if (!org) {
-        ctrl.logger?.debug?.(`[DeletionController] 404 — orgId=${orgId} not found`);
-        return c.json({ error: `Organisation not found: ${orgId}` }, 404);
-      }
+    const member = await this.orgRepository.getMember(orgId, userId);
+    if (!member || member.role !== 'org-admin') {
+      this.logger?.debug?.(`[DeletionController] 403 — userId=${userId} is not org-admin of orgId=${orgId}`);
+      return { statusCode: 403, body: { error: 'Forbidden: org-admin role required' } };
+    }
 
-      const member = await ctrl.orgRepository.getMember(orgId, userId);
-      if (!member || member.role !== 'org-admin') {
-        ctrl.logger?.debug?.(`[DeletionController] 403 — userId=${userId} is not org-admin of orgId=${orgId}`);
-        return c.json({ error: 'Forbidden: org-admin role required' }, 403);
-      }
+    await this.deletionService.deleteOrg(orgId);
+    this.logger?.info?.(`[DeletionController] deleteOrg orgId=${orgId} by userId=${userId}`);
 
-      await ctrl.deletionService.deleteOrg(orgId);
-      ctrl.logger?.info?.(`[DeletionController] deleteOrg orgId=${orgId} by userId=${userId}`);
-
-      return c.body(null, 204);
-    });
+    return null; // dispatch converts to { statusCode: 204 }
   }
 }

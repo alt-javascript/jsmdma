@@ -27,21 +27,17 @@ npm install @alt-javascript/jsmdma-hono
 
 ## CDI Registration Order
 
-`AuthMiddlewareRegistrar` **must** be registered before any controller. Hono registers middleware in insertion order — `app.use()` must fire before route handlers.
+Auth middleware **must** be registered before any controller. Hono registers middleware in insertion order — `app.use()` must fire before route handlers.
 
 ```js
 import {
     AppSyncController, DocIndexController, SearchController,
     ExportController, DeletionController
 } from '@alt-javascript/jsmdma-hono';
-import {AuthMiddlewareRegistrar} from '@alt-javascript/jsmdma-auth-hono';
 
 const context = new Context([
     // ... repositories and services ...
-    {
-        Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
-        properties: [{name: 'jwtSecret', path: 'auth.jwt.secret'}]
-    },
+    // auth middleware (provided by boot-hono) goes here, before controllers
     {Reference: AppSyncController, name: 'appSyncController', scope: 'singleton'},
     {Reference: DocIndexController, name: 'docIndexController', scope: 'singleton'},
     {Reference: SearchController, name: 'searchController', scope: 'singleton'},
@@ -52,40 +48,21 @@ const context = new Context([
 
 ## Canonical Starter Composition (`jsmdmaHonoStarter`)
 
-`jsmdmaHonoStarter()` is the canonical auth-enabled composer for jsmdma Hono apps.
-
-Internally it takes `authHonoStarter()` registrations and applies the explicit auth boundary API from `@alt-javascript/jsmdma-auth-hono`:
-
-- `infrastructureRegistrations` (auth middleware + typed error contract layer)
-- `legacyControllerRegistrations` (`AuthController`, `OrgController`)
+`jsmdmaHonoStarter()` is the canonical composer for jsmdma Hono apps.
 
 Composition order is deterministic:
 
 1. `honoStarter()` + `jsnosqlcAutoConfiguration()` infrastructure
 2. jsmdma sync services (`SyncRepository`, `SyncService`, `AppSyncService`, registry/validator)
-3. auth `infrastructureRegistrations`
-4. boot oauth foundation (`oauthJsnosqlcStarter()`, `oauthStarter()`)
-5. auth `legacyControllerRegistrations`
-6. `AppSyncController`
-
-This boundary-aware ordering preserves middleware-before-routes guarantees while exposing boot oauth routes (`/oauth/:provider/authorize`, `/oauth/:provider/callback`) on the canonical starter path.
-
-Feature closures are still enforced:
-
-- `features.auth=false` excludes both auth and oauth stacks.
-- `features.sync=true` requires `features.auth=true`.
+3. `OrgController`
+4. `AppSyncController`
 
 ### Focused composition proof matrix
 
-Run this matrix when validating canonical composition or diagnosing auth-boundary drift:
+Run this matrix when validating canonical composition or diagnosing composition drift:
 
 ```bash
-npx mocha --recursive packages/jsmdma-auth-hono/test/authHonoStarter.spec.js
 npx mocha --recursive packages/jsmdma-hono/test/jsmdmaHonoStarter.spec.js
-npx mocha --recursive packages/jsmdma-hono/test/oauthStarterRoutes.spec.js
-npx mocha --recursive packages/example-auth/test/runLocalStarter.spec.js
-npx mocha --recursive packages/example-auth/test/runCanonicalStarter.spec.js
-node packages/example-auth/run.js
 ```
 
 ## Further Reading

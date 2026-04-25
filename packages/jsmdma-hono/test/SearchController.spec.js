@@ -1,10 +1,10 @@
 /**
  * SearchController.spec.js — CDI integration tests for SearchController
  *
- * Full CDI stack: AuthMiddlewareRegistrar → SearchController → SearchService
+ * Full CDI stack: OAuthSessionMiddleware → SearchController → SearchService
  *                 → SyncRepository + DocumentIndexRepository
  * Uses Hono's app.request() — no real HTTP server.
- * Uses JwtSession.sign() to mint test tokens.
+ * Uses mintTestToken() to mint test tokens via boot's OAuthSessionEngine.
  *
  * Test matrix covers:
  *   - 401 when no Authorization header
@@ -25,20 +25,18 @@ import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
 import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
+import { OAuthSessionMiddleware } from '@alt-javascript/boot-oauth';
 import {
   SyncRepository, SyncService, AppSyncService, SearchService,
   ApplicationRegistry, SchemaValidator, DocumentIndexRepository,
+  OrgRepository, OrgService,
 } from '@alt-javascript/jsmdma-server';
-import { AuthMiddlewareRegistrar } from '@alt-javascript/jsmdma-auth-hono';
-import { UserRepository, OrgRepository, OrgService } from '@alt-javascript/jsmdma-auth-server';
-import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 import { HLC } from '@alt-javascript/jsmdma-core';
+import { mintTestToken, TestOAuthSessionEngine } from './helpers/mintTestToken.js';
 import SearchController from '../SearchController.js';
 import AppSyncController from '../AppSyncController.js';
 
 // ── constants ─────────────────────────────────────────────────────────────────
-
-const JWT_SECRET = 'test-secret-at-least-32-chars-long!!';
 
 const APPLICATIONS_CONFIG = {
   'year-planner': { description: 'Year-planning app' },
@@ -49,7 +47,6 @@ const BASE_CONFIG = {
   boot:         { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
   logging:      { level: { ROOT: 'error' } },
   server:       { port: 0 },
-  auth:         { jwt: { secret: JWT_SECRET } },
   applications: APPLICATIONS_CONFIG,
 };
 
@@ -73,17 +70,16 @@ async function buildContext() {
       properties: [{ name: 'applications', path: 'applications' }] },
     { Reference: SchemaValidator,         name: 'schemaValidator',         scope: 'singleton',
       properties: [{ name: 'applications', path: 'applications' }] },
-    { Reference: UserRepository,          name: 'userRepository',          scope: 'singleton' },
     { Reference: OrgRepository,           name: 'orgRepository',           scope: 'singleton' },
     { Reference: OrgService,              name: 'orgService',              scope: 'singleton' },
     { Reference: DocumentIndexRepository, name: 'documentIndexRepository', scope: 'singleton' },
-    // Auth middleware MUST come before controllers
-    { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
-      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
+    // OAuthSessionMiddleware requires oauthSessionEngine CDI bean
+    { Reference: TestOAuthSessionEngine,  name: 'oauthSessionEngine',      scope: 'singleton' },
+    { Reference: OAuthSessionMiddleware,  name: 'oauthSessionMiddleware',  scope: 'singleton' },
     // AppSyncController for seeding test data via HTTP
-    { Reference: AppSyncController,   name: 'appSyncController',   scope: 'singleton' },
-    // SearchController AFTER AuthMiddlewareRegistrar
-    { Reference: SearchController,    name: 'searchController',    scope: 'singleton' },
+    { Reference: AppSyncController,       name: 'appSyncController',       scope: 'singleton' },
+    // SearchController AFTER OAuthSessionMiddleware
+    { Reference: SearchController,        name: 'searchController',        scope: 'singleton' },
   ]);
 
   const appCtx = new ApplicationContext({ contexts: [context], config });
@@ -93,8 +89,8 @@ async function buildContext() {
   return appCtx;
 }
 
-async function makeToken(userId = 'user-uuid', extra = {}) {
-  return JwtSession.sign({ sub: userId, providers: ['github'], ...extra }, JWT_SECRET);
+function makeToken(userId = 'user-uuid', extra = {}) {
+  return mintTestToken({ userId, ...extra });
 }
 
 /** POST /:application/search */

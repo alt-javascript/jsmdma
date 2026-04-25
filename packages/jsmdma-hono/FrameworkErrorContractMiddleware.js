@@ -1,9 +1,9 @@
 /**
  * FrameworkErrorContractMiddleware.js — centralized HTTP error envelope normalizer.
  *
- * Applies to all starter-registered routes and normalizes >=400 responses to a
- * deterministic typed contract while preserving backward-compatible `error`
- * text on non-5xx paths.
+ * Boot __middleware pipeline version: works on result objects { statusCode, body, headers }.
+ * Also exports frameworkErrorContractMiddleware() (Hono-style) for backward compatibility
+ * during the transition — used by auth-hono's starter until S03.
  */
 import { normalizeFrameworkErrorBody } from './frameworkErrorContract.js';
 
@@ -81,15 +81,38 @@ export function frameworkErrorContractMiddleware(logger) {
 }
 
 export default class FrameworkErrorContractMiddleware {
+  static __middleware = { order: 3 };
+
   constructor() {
     this.logger = null; // CDI autowired
   }
 
-  /**
-   * Register global envelope normalization for starter-driven failures.
-   * @param {import('hono').Hono} app
-   */
   routes(app) {
-    app.use('*', frameworkErrorContractMiddleware(this.logger));
+    app.notFound((c) => c.json(normalizeFrameworkErrorBody({ status: 404 }), 404));
+  }
+
+  /**
+   * Boot pipeline handler — normalizes >=400 result objects to the typed error envelope.
+   * @param {{ statusCode: number, body: unknown, headers: object }} request
+   * @param {Function} next
+   * @returns {Promise<{ statusCode: number, body: unknown, headers: object }>}
+   */
+  async handle(request, next) {
+    const result = await next(request);
+
+    // statusCode == null means the handler returned a plain object (e.g. { status: 'ok' });
+    // pass through unchanged so HonoControllerRegistrar can serialize it with c.json(result).
+    if (!result || result.statusCode == null || result.statusCode < 400) {
+      return result;
+    }
+
+    const normalizedBody = normalizeFrameworkErrorBody({
+      status: result.statusCode,
+      body: result.body,
+    });
+
+    this.logger?.debug?.(`[FrameworkErrorContractMiddleware] normalized ${result.statusCode} response with code=${normalizedBody.code}`);
+
+    return { ...result, body: normalizedBody };
   }
 }

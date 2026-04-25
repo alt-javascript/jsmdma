@@ -1,9 +1,9 @@
 /**
  * DocIndexController.spec.js — Integration tests for DocIndexController
  *
- * Full CDI stack: AuthMiddlewareRegistrar → DocIndexController → DocumentIndexRepository
+ * Full CDI stack: OAuthSessionMiddleware → DocIndexController → DocumentIndexRepository
  * Uses Hono's app.request() — no real HTTP server.
- * Uses JwtSession.sign() to mint test tokens.
+ * Uses mintTestToken() to mint test tokens via boot's OAuthSessionEngine.
  */
 import { assert } from 'chai';
 import '@alt-javascript/jsnosqlc-memory';
@@ -11,23 +11,18 @@ import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
 import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
+import { OAuthSessionMiddleware } from '@alt-javascript/boot-oauth';
 import { DocumentIndexRepository } from '@alt-javascript/jsmdma-server';
-import { AuthMiddlewareRegistrar } from '@alt-javascript/jsmdma-auth-hono';
-import {
-  OrgRepository, OrgService, UserRepository,
-} from '@alt-javascript/jsmdma-auth-server';
-import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
+import { OrgRepository, OrgService } from '@alt-javascript/jsmdma-server';
+import { mintTestToken, TestOAuthSessionEngine } from './helpers/mintTestToken.js';
 import DocIndexController from '../DocIndexController.js';
 
 // ── constants ─────────────────────────────────────────────────────────────────
-
-const JWT_SECRET = 'test-secret-at-least-32-chars-long!!';
 
 const BASE_CONFIG = {
   boot:    { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
   logging: { level: { ROOT: 'error' } },
   server:  { port: 0 },
-  auth:    { jwt: { secret: JWT_SECRET } },
 };
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -38,12 +33,11 @@ async function buildContext() {
   const context = new Context([
     ...honoStarter(),
     ...jsnosqlcAutoConfiguration(),
-    { Reference: UserRepository,  name: 'userRepository',  scope: 'singleton' },
     { Reference: OrgRepository,   name: 'orgRepository',   scope: 'singleton' },
     { Reference: OrgService,      name: 'orgService',      scope: 'singleton' },
-    // Auth middleware MUST come before DocIndexController
-    { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
-      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
+    // OAuthSessionMiddleware requires oauthSessionEngine CDI bean
+    { Reference: TestOAuthSessionEngine, name: 'oauthSessionEngine', scope: 'singleton' },
+    { Reference: OAuthSessionMiddleware, name: 'oauthSessionMiddleware', scope: 'singleton' },
     { Reference: DocumentIndexRepository, name: 'documentIndexRepository', scope: 'singleton' },
     { Reference: DocIndexController,      name: 'docIndexController',      scope: 'singleton' },
   ]);
@@ -55,8 +49,8 @@ async function buildContext() {
   return appCtx;
 }
 
-async function makeToken(userId = 'user-uuid', extra = {}) {
-  return JwtSession.sign({ sub: userId, providers: ['github'], ...extra }, JWT_SECRET);
+function makeToken(userId = 'user-uuid', extra = {}) {
+  return mintTestToken({ userId, ...extra });
 }
 
 function docIndexReq(app, method, path, token, body) {
@@ -98,13 +92,13 @@ describe('DocIndexController (CDI integration)', () => {
     });
 
     it('returns 404 for a nonexistent entry', async () => {
-      const token = await makeToken('user-a');
+      const token = makeToken('user-a');
       const res   = await docIndexReq(app, 'GET', '/docIndex/todo/nonexistent', token);
       assert.equal(res.status, 404);
     });
 
     it('returns 200 and the entry for the owner', async () => {
-      const token = await makeToken('owner-get');
+      const token = makeToken('owner-get');
       // Seed directly via repository
       await docIndexRepo.upsertOwnership('owner-get', 'todo', 'task-1', 'tasks');
 
@@ -122,11 +116,11 @@ describe('DocIndexController (CDI integration)', () => {
       await docIndexRepo.upsertOwnership('real-owner', 'todo', 'task-1', 'tasks');
 
       // 'attacker' cannot read it via the owner-keyed path
-      // DocIndexController does get(user.sub, app, docKey) so this will return 404
+      // DocIndexController does get(user.userId, app, docKey) so this will return 404
       // because the key doesn't exist for the attacker's userId
-      const attackerToken = await makeToken('attacker');
+      const attackerToken = makeToken('attacker');
       const res = await docIndexReq(app, 'GET', '/docIndex/todo/task-1', attackerToken);
-      // get() uses user.sub as userId — entry stored under 'real-owner' won't be found
+      // get() uses user.userId as userId — entry stored under 'real-owner' won't be found
       assert.equal(res.status, 404);
     });
   });
@@ -140,14 +134,14 @@ describe('DocIndexController (CDI integration)', () => {
     });
 
     it('returns 404 when entry does not exist', async () => {
-      const token = await makeToken('patch-owner');
+      const token = makeToken('patch-owner');
       const res   = await docIndexReq(app, 'PATCH', '/docIndex/todo/missing', token, { visibility: 'shared' });
       assert.equal(res.status, 404);
     });
 
     it('updates visibility to shared — returns 200 with updated entry', async () => {
       await docIndexRepo.upsertOwnership('patch-vis', 'todo', 'task-1', 'tasks');
-      const token = await makeToken('patch-vis');
+      const token = makeToken('patch-vis');
 
       const res = await docIndexReq(app, 'PATCH', '/docIndex/todo/task-1', token, { visibility: 'shared' });
       assert.equal(res.status, 200);
@@ -157,7 +151,7 @@ describe('DocIndexController (CDI integration)', () => {
 
     it('updates visibility to public — returns 200', async () => {
       await docIndexRepo.upsertOwnership('patch-pub', 'todo', 'task-2', 'tasks');
-      const token = await makeToken('patch-pub');
+      const token = makeToken('patch-pub');
 
       const res = await docIndexReq(app, 'PATCH', '/docIndex/todo/task-2', token, { visibility: 'public' });
       assert.equal(res.status, 200);
@@ -167,7 +161,7 @@ describe('DocIndexController (CDI integration)', () => {
 
     it('returns 400 for an invalid visibility value', async () => {
       await docIndexRepo.upsertOwnership('patch-bad-vis', 'todo', 'task-3', 'tasks');
-      const token = await makeToken('patch-bad-vis');
+      const token = makeToken('patch-bad-vis');
 
       const res = await docIndexReq(app, 'PATCH', '/docIndex/todo/task-3', token, { visibility: 'banana' });
       assert.equal(res.status, 400);
@@ -177,7 +171,7 @@ describe('DocIndexController (CDI integration)', () => {
 
     it('returns 400 when sharedWith is not an array', async () => {
       await docIndexRepo.upsertOwnership('patch-bad-sw', 'todo', 'task-4', 'tasks');
-      const token = await makeToken('patch-bad-sw');
+      const token = makeToken('patch-bad-sw');
 
       const res = await docIndexReq(app, 'PATCH', '/docIndex/todo/task-4', token, { sharedWith: 'not-an-array' });
       assert.equal(res.status, 400);
@@ -187,7 +181,7 @@ describe('DocIndexController (CDI integration)', () => {
 
     it('adds a sharedWith entry — returns 200 with updated sharedWith', async () => {
       await docIndexRepo.upsertOwnership('patch-sw', 'todo', 'task-5', 'tasks');
-      const token = await makeToken('patch-sw');
+      const token = makeToken('patch-sw');
 
       const res = await docIndexReq(app, 'PATCH', '/docIndex/todo/task-5', token, {
         sharedWith: [{ userId: 'friend-1', app: 'todo' }],
@@ -199,9 +193,9 @@ describe('DocIndexController (CDI integration)', () => {
     });
 
     it('non-owner cannot patch (entry exists for different userId)', async () => {
-      // Seed under 'real-owner-patch' — non-owner will get 404 because key lookup uses user.sub
+      // Seed under 'real-owner-patch' — non-owner will get 404 because key lookup uses user.userId
       await docIndexRepo.upsertOwnership('real-owner-patch', 'todo', 'task-6', 'tasks');
-      const nonOwnerToken = await makeToken('non-owner-patch');
+      const nonOwnerToken = makeToken('non-owner-patch');
 
       const res = await docIndexReq(app, 'PATCH', '/docIndex/todo/task-6', nonOwnerToken, { visibility: 'shared' });
       // get() will return null (wrong userId in key) → 404
@@ -218,14 +212,14 @@ describe('DocIndexController (CDI integration)', () => {
     });
 
     it('returns 404 when entry does not exist', async () => {
-      const token = await makeToken('mint-owner');
+      const token = makeToken('mint-owner');
       const res   = await docIndexReq(app, 'POST', '/docIndex/todo/missing/shareToken', token);
       assert.equal(res.status, 404);
     });
 
     it('returns 200 with a UUID shareToken', async () => {
       await docIndexRepo.upsertOwnership('mint-user', 'todo', 'task-1', 'tasks');
-      const token = await makeToken('mint-user');
+      const token = makeToken('mint-user');
 
       const res = await docIndexReq(app, 'POST', '/docIndex/todo/task-1/shareToken', token);
       assert.equal(res.status, 200);
@@ -237,7 +231,7 @@ describe('DocIndexController (CDI integration)', () => {
 
     it('minted token is persisted in the repository', async () => {
       await docIndexRepo.upsertOwnership('mint-persist', 'todo', 'task-mint', 'tasks');
-      const token = await makeToken('mint-persist');
+      const token = makeToken('mint-persist');
 
       const res = await docIndexReq(app, 'POST', '/docIndex/todo/task-mint/shareToken', token);
       assert.equal(res.status, 200);
@@ -249,7 +243,7 @@ describe('DocIndexController (CDI integration)', () => {
 
     it('returns 403 for a non-owner (entry keyed under different userId)', async () => {
       await docIndexRepo.upsertOwnership('real-owner-mint', 'todo', 'task-1', 'tasks');
-      const nonOwnerToken = await makeToken('non-owner-mint');
+      const nonOwnerToken = makeToken('non-owner-mint');
 
       // get() will return null (wrong userId in key) → 404
       const res = await docIndexReq(app, 'POST', '/docIndex/todo/task-1/shareToken', nonOwnerToken);
@@ -266,14 +260,14 @@ describe('DocIndexController (CDI integration)', () => {
     });
 
     it('returns 404 when entry does not exist', async () => {
-      const token = await makeToken('revoke-owner');
+      const token = makeToken('revoke-owner');
       const res   = await docIndexReq(app, 'DELETE', '/docIndex/todo/missing/shareToken', token);
       assert.equal(res.status, 404);
     });
 
     it('returns 200 with shareToken: null after revoking', async () => {
       await docIndexRepo.upsertOwnership('revoke-user', 'todo', 'task-1', 'tasks');
-      const token = await makeToken('revoke-user');
+      const token = makeToken('revoke-user');
 
       // First mint a token
       await docIndexRepo.setShareToken('revoke-user', 'todo', 'task-1', 'some-token-value');
@@ -287,7 +281,7 @@ describe('DocIndexController (CDI integration)', () => {
 
     it('shareToken is null in repository after revoke', async () => {
       await docIndexRepo.upsertOwnership('revoke-persist', 'todo', 'task-revoke', 'tasks');
-      const token = await makeToken('revoke-persist');
+      const token = makeToken('revoke-persist');
 
       await docIndexRepo.setShareToken('revoke-persist', 'todo', 'task-revoke', 'active-token');
 
@@ -300,7 +294,7 @@ describe('DocIndexController (CDI integration)', () => {
 
     it('returns 403/404 for a non-owner', async () => {
       await docIndexRepo.upsertOwnership('real-owner-revoke', 'todo', 'task-1', 'tasks');
-      const nonOwnerToken = await makeToken('non-owner-revoke');
+      const nonOwnerToken = makeToken('non-owner-revoke');
 
       const res = await docIndexReq(app, 'DELETE', '/docIndex/todo/task-1/shareToken', nonOwnerToken);
       assert.equal(res.status, 404);

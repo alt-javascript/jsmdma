@@ -12,3 +12,7 @@ export { namespaceKey } from './namespaceKey.js';
 export { default as DocumentIndexRepository } from './DocumentIndexRepository.js';
 export { default as ExportService } from './ExportService.js';
 export { default as DeletionService } from './DeletionService.js';
+export { default as OrgRepository } from './OrgRepository.js';
+export { default as OrgService } from './OrgService.js';
+export { default as UserRepository } from './UserRepository.js';
+export { OrgNotFoundError, NotOrgAdminError, LastAdminError, AlreadyMemberError, NotMemberError, DuplicateOrgNameError } from './orgErrors.js';

@@ -3,10 +3,9 @@ import '@alt-javascript/jsnosqlc-memory';
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
+import { OAuthSessionMiddleware } from '@alt-javascript/boot-oauth';
 import { HLC } from '@alt-javascript/jsmdma-core';
 import {
-  FULL_STACK_JWT_SECRET,
   FULL_STACK_APPLICATIONS_CONFIG,
   FULL_STACK_STARTER_OPTIONS,
   NO_REG_ORG_ONLY_STARTER_OPTIONS,
@@ -18,6 +17,7 @@ import {
   SHARED_NOTES_APPLICATION,
   buildSharedNotesStarterContext,
 } from '../runtime/sharedNotesStarterApp.js';
+import { mintTestToken, TestOAuthSessionEngine } from '../../jsmdma-hono/test/helpers/mintTestToken.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const RUN_JS_PATH = resolve(__dirname, '../run.js');
@@ -26,12 +26,22 @@ const LAMBDA_HANDLER_PATH = resolve(__dirname, '../lambda-handler.js');
 const FULL_STACK_RUNTIME_PATH = resolve(__dirname, '../runtime/fullStackStarterApp.js');
 const SHARED_NOTES_RUNTIME_PATH = resolve(__dirname, '../runtime/sharedNotesStarterApp.js');
 
-const RUN_JS_JWT_SECRET = 'example-jwt-secret-at-least-32-chars!';
+function withTestAuth(extraHooks = {}) {
+  return {
+    hooks: {
+      beforeSync: [
+        { Reference: TestOAuthSessionEngine, name: 'oauthSessionEngine', scope: 'singleton' },
+        { Reference: OAuthSessionMiddleware,  name: 'oauthSessionMiddleware',  scope: 'singleton' },
+        ...(extraHooks.beforeSync ?? []),
+      ],
+      ...(extraHooks.beforeAppSync ? { beforeAppSync: extraHooks.beforeAppSync } : {}),
+      ...(extraHooks.afterAppSync  ? { afterAppSync:  extraHooks.afterAppSync  } : {}),
+    },
+  };
+}
 
 async function buildRunJsContext() {
-  return buildSharedNotesStarterContext({
-    jwtSecret: RUN_JS_JWT_SECRET,
-  });
+  return buildSharedNotesStarterContext();
 }
 
 async function syncPost(app, application, body, token) {
@@ -75,6 +85,9 @@ describe('starter entrypoint regressions (packages/example)', () => {
       assert.notMatch(source, /new\s+Context\(/);
       assert.notMatch(source, /new\s+ApplicationContext\(/);
       assert.notMatch(source, /new\s+EphemeralConfig\(/);
+      assert.notMatch(source, /from\s*['"]@alt-javascript\/jsmdma-auth-core['"]/);
+      assert.notMatch(source, /JwtSession/);
+      assert.match(source, /mintTestToken/);
     });
 
     it('run-apps.js consumes the shared full-stack starter runtime module', async () => {
@@ -89,6 +102,10 @@ describe('starter entrypoint regressions (packages/example)', () => {
       assert.notMatch(source, /const\s+PLANNER_SCHEMA_PATH\s*=/);
       assert.notMatch(source, /from\s*['"]@alt-javascript\/jsmdma-server['"]/);
       assert.notMatch(source, /from\s*['"]@alt-javascript\/jsmdma-auth-server['"]/);
+      assert.notMatch(source, /from\s*['"]@alt-javascript\/jsmdma-auth-core['"]/);
+      assert.notMatch(source, /JwtSession/);
+      assert.notMatch(source, /FULL_STACK_JWT_SECRET/);
+      assert.match(source, /mintTestToken/);
     });
 
     it('lambda-handler.js consumes shared runtime composition and hono/aws-lambda adapter wiring', async () => {
@@ -133,7 +150,7 @@ describe('starter entrypoint regressions (packages/example)', () => {
   });
 
   describe('runtime contracts', () => {
-    it('run.js composition serves /health and keeps /shared-notes/sync JWT-gated', async () => {
+    it('run.js composition serves /health and keeps /shared-notes/sync endpoint mounted', async () => {
       const appCtx = await buildRunJsContext();
       try {
         const app = appCtx.get('honoAdapter').app;
@@ -152,22 +169,20 @@ describe('starter entrypoint regressions (packages/example)', () => {
           }),
         });
 
-        assert.equal(unauthSync.status, 401);
+        // Sync endpoint is mounted — starter does not register auth middleware.
+        assert.notEqual(unauthSync.status, 404);
       } finally {
         await appCtx.stop?.();
       }
     });
 
     it('run-apps composition keeps preference boundary checks and hook-mounted routes live', async () => {
-      const { app, appCtx } = await buildFullStackStarterApp();
+      const { app, appCtx } = await buildFullStackStarterApp({ starterOptions: withTestAuth() });
       try {
         const health = await app.request('/health');
         assert.equal(health.status, 200);
 
-        const token = await JwtSession.sign(
-          { sub: 'starter-entrypoint-user', providers: ['test'] },
-          FULL_STACK_JWT_SECRET,
-        );
+        const token = mintTestToken({ userId: 'starter-entrypoint-user' });
 
         const opaqueClock = HLC.tick(HLC.zero(), Date.now());
         const genericPrefs = await syncPost(app, 'year-planner', {
@@ -242,21 +257,9 @@ describe('starter entrypoint regressions (packages/example)', () => {
     });
 
     it('no-reg helper keeps POST /orgs deterministic at 403 when orgs.registerable is absent', async () => {
-      const { app, appCtx } = await buildFullStackStarterAppNoReg();
+      const { app, appCtx } = await buildFullStackStarterAppNoReg({ starterOptions: withTestAuth() });
       try {
-        const token = await JwtSession.sign(
-          { sub: 'starter-no-reg-user', providers: ['test'] },
-          FULL_STACK_JWT_SECRET,
-        );
-
-        const userRepo = appCtx.get('userRepository');
-        await userRepo._users().store('starter-no-reg-user', {
-          userId: 'starter-no-reg-user',
-          email: 'starter-no-reg-user@example.com',
-          providers: ['test'],
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        });
+        const token = mintTestToken({ userId: 'starter-no-reg-user' });
 
         const res = await app.request('/orgs', {
           method: 'POST',
@@ -301,6 +304,7 @@ describe('starter entrypoint regressions (packages/example)', () => {
       const missingSchemaPath = '/definitely-missing/planner-schema.json';
       const yearPlannerConfig = FULL_STACK_APPLICATIONS_CONFIG['year-planner'];
       const appCtx = await buildFullStackStarterContext({
+        starterOptions: withTestAuth(),
         applicationsConfig: {
           ...FULL_STACK_APPLICATIONS_CONFIG,
           'year-planner': {
@@ -318,10 +322,7 @@ describe('starter entrypoint regressions (packages/example)', () => {
 
       try {
         const app = appCtx.get('honoAdapter').app;
-        const token = await JwtSession.sign(
-          { sub: 'missing-schema-user', providers: ['test'] },
-          FULL_STACK_JWT_SECRET,
-        );
+        const token = mintTestToken({ userId: 'missing-schema-user' });
         const badClock = HLC.tick(HLC.zero(), Date.now());
 
         const response = await syncPost(app, 'year-planner', {
@@ -369,11 +370,8 @@ describe('starter entrypoint regressions (packages/example)', () => {
     it('exports deterministic org-only no-reg starter options', () => {
       assert.deepEqual(NO_REG_ORG_ONLY_STARTER_OPTIONS.features, {
         sync: false,
-        auth: false,
         appSyncController: false,
       });
-      assert.isArray(NO_REG_ORG_ONLY_STARTER_OPTIONS.hooks.beforeSync);
-      assert.isAbove(NO_REG_ORG_ONLY_STARTER_OPTIONS.hooks.beforeSync.length, 0);
     });
   });
 });

@@ -7,10 +7,10 @@
  * The :application path segment is validated against the ApplicationRegistry
  * allowlist.  Unknown applications return 404.
  *
- * Authentication is required.  The auth middleware (AuthMiddlewareRegistrar)
- * must be registered before this controller in the CDI context.  The JWT
- * payload is read from the Hono context via honoCtx.get('user'); requests
- * without a valid token are rejected with 401.
+ * Authentication is required.  OAuthSessionMiddleware must be registered
+ * before this controller in the CDI context.  The identity is read from
+ * request.identity (set by OAuthSessionMiddleware); requests without a
+ * valid session token are rejected with 401.
  *
  * Request body:
  *   { collection: string, filter: object (pre-built AST with type field) }
@@ -36,18 +36,18 @@ export default class SearchController {
 
   /**
    * POST /:application/search
-   * @param {{ body: Object, params: Object, honoCtx: import('hono').Context }} request
+   * @param {{ body: Object, params: Object, identity: Object }} request
    */
   async search(request) {
-    const { body, params, honoCtx } = request;
+    const { body, params } = request;
 
     // ── Auth guard ────────────────────────────────────────────────────────────
-    const userPayload = honoCtx?.get?.('user') ?? null;
-    if (!userPayload || !userPayload.sub) {
+    const userPayload = request.identity ?? null;
+    if (!userPayload || !userPayload.userId) {
       this.logger?.debug?.('[SearchController] 401 — missing or invalid user payload');
       return { statusCode: 401, body: { error: 'Authentication required' } };
     }
-    const userId = userPayload.sub;
+    const userId = userPayload.userId;
 
     // ── Application allowlist ────────────────────────────────────────────────
     const application = params?.application;

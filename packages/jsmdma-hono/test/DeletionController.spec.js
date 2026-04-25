@@ -2,11 +2,11 @@
  * DeletionController.spec.js — CDI integration tests for DeletionController.
  *
  * Full CDI stack:
- *   AuthMiddlewareRegistrar → DeletionController → DeletionService
+ *   OAuthSessionMiddleware → DeletionController → DeletionService
  *   → SyncRepository + DocumentIndexRepository + OrgRepository + UserRepository
  *
  * Uses Hono's app.request() — no real HTTP server.
- * Uses JwtSession.sign() to mint test tokens.
+ * Uses mintTestToken() to mint test tokens via boot's OAuthSessionEngine.
  * Seeds data via AppSyncController (same syncPost helper as other specs).
  *
  * Test matrix:
@@ -33,21 +33,20 @@ import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
 import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
+import { OAuthSessionMiddleware } from '@alt-javascript/boot-oauth';
 import {
   SyncRepository, SyncService, AppSyncService, ExportService,
   ApplicationRegistry, SchemaValidator, DocumentIndexRepository,
   DeletionService,
 } from '@alt-javascript/jsmdma-server';
-import { AuthMiddlewareRegistrar } from '@alt-javascript/jsmdma-auth-hono';
-import { UserRepository, OrgRepository, OrgService } from '@alt-javascript/jsmdma-auth-server';
-import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
+import { OrgRepository, OrgService } from '@alt-javascript/jsmdma-server';
+import { UserRepository } from '@alt-javascript/jsmdma-server';
 import { HLC } from '@alt-javascript/jsmdma-core';
+import { mintTestToken, TestOAuthSessionEngine } from './helpers/mintTestToken.js';
 import AppSyncController    from '../AppSyncController.js';
 import DeletionController   from '../DeletionController.js';
 
 // ── constants ─────────────────────────────────────────────────────────────────
-
-const JWT_SECRET = 'test-secret-at-least-32-chars-long!!';
 
 const APPLICATIONS_CONFIG = {
   'year-planner': {
@@ -61,7 +60,6 @@ const BASE_CONFIG = {
   boot:         { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
   logging:      { level: { ROOT: 'error' } },
   server:       { port: 0 },
-  auth:         { jwt: { secret: JWT_SECRET } },
   applications: APPLICATIONS_CONFIG,
 };
 
@@ -69,7 +67,7 @@ const BASE_CONFIG = {
 
 /**
  * Build a full CDI context with DeletionController, DeletionService, and AppSyncController.
- * CDI order: DeletionService → AuthMiddlewareRegistrar → AppSyncController → DeletionController
+ * CDI order: DeletionService → OAuthSessionMiddleware → AppSyncController → DeletionController
  */
 async function buildContext() {
   const config = new EphemeralConfig(BASE_CONFIG);
@@ -90,12 +88,13 @@ async function buildContext() {
     { Reference: OrgRepository,           name: 'orgRepository',           scope: 'singleton' },
     { Reference: OrgService,              name: 'orgService',              scope: 'singleton' },
     { Reference: DocumentIndexRepository, name: 'documentIndexRepository', scope: 'singleton' },
+    // OAuthSessionMiddleware requires oauthSessionEngine CDI bean
+    { Reference: TestOAuthSessionEngine, name: 'oauthSessionEngine', scope: 'singleton' },
     // Auth middleware MUST come before controllers
-    { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
-      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
+    { Reference: OAuthSessionMiddleware, name: 'oauthSessionMiddleware', scope: 'singleton' },
     // AppSyncController for seeding test data via HTTP
     { Reference: AppSyncController,       name: 'appSyncController',       scope: 'singleton' },
-    // DeletionController AFTER AuthMiddlewareRegistrar
+    // DeletionController AFTER OAuthSessionMiddleware
     { Reference: DeletionController,      name: 'deletionController',      scope: 'singleton' },
   ]);
 
@@ -106,8 +105,8 @@ async function buildContext() {
   return appCtx;
 }
 
-async function makeToken(userId = 'user-uuid', extra = {}) {
-  return JwtSession.sign({ sub: userId, providers: ['github'], ...extra }, JWT_SECRET);
+function makeToken(userId = 'user-uuid', extra = {}) {
+  return mintTestToken({ userId, ...extra });
 }
 
 /** DELETE /account */

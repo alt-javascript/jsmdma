@@ -21,8 +21,8 @@ import SyncRepository           from '../SyncRepository.js';
 import DocumentIndexRepository  from '../DocumentIndexRepository.js';
 import ApplicationRegistry      from '../ApplicationRegistry.js';
 import DeletionService          from '../DeletionService.js';
-import UserRepository  from '../../jsmdma-auth-server/UserRepository.js';
-import OrgRepository   from '../../jsmdma-auth-server/OrgRepository.js';
+import UserRepository  from '../UserRepository.js';
+import OrgRepository   from '../OrgRepository.js';
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -76,7 +76,7 @@ describe('DeletionService', () => {
         'year-planner': { collections: { planners: {} } },
       });
 
-      await userRepo.create('alice', 'alice@example.com', 'local', 'alice-pid');
+      await userRepo.create('alice', 'alice@example.com', [{ provider: 'local', providerUserId: 'alice-pid' }]);
       await seedUserDoc(syncRepo, docIndexRepo, 'alice', 'year-planner', 'planners', 'doc-1',
         { title: 'My plan' });
 
@@ -100,7 +100,7 @@ describe('DeletionService', () => {
         'year-planner': { collections: { planners: {} } },
       });
 
-      await userRepo.create('bob', 'bob@example.com', 'local', 'bob-pid');
+      await userRepo.create('bob', 'bob@example.com', [{ provider: 'local', providerUserId: 'bob-pid' }]);
 
       // Should not throw even with no docs
       await svc.deleteUser('bob');
@@ -114,7 +114,7 @@ describe('DeletionService', () => {
         'year-planner': { collections: { planners: {} } },
       });
 
-      await userRepo.create('carol', 'carol@example.com', 'local', 'carol-pid');
+      await userRepo.create('carol', 'carol@example.com', [{ provider: 'local', providerUserId: 'carol-pid' }]);
       await orgRepo.createOrg('org-1', 'Carol Org', 'carol');
       await orgRepo.createMember('org-1', 'carol', 'org-admin');
 
@@ -130,7 +130,7 @@ describe('DeletionService', () => {
         'todo':         { collections: { tasks: {}   } },
       });
 
-      await userRepo.create('dave', 'dave@example.com', 'local', 'dave-pid');
+      await userRepo.create('dave', 'dave@example.com', [{ provider: 'local', providerUserId: 'dave-pid' }]);
       await seedUserDoc(syncRepo, docIndexRepo, 'dave', 'year-planner', 'planners', 'p1',
         { title: 'Plan' });
       await seedUserDoc(syncRepo, docIndexRepo, 'dave', 'todo', 'tasks', 't1',
@@ -154,7 +154,7 @@ describe('DeletionService', () => {
         'year-planner': { collections: { planners: {} } },
       });
 
-      await userRepo.create('eve', 'eve@example.com', 'local', 'eve-pid');
+      await userRepo.create('eve', 'eve@example.com', [{ provider: 'local', providerUserId: 'eve-pid' }]);
       await seedUserDoc(syncRepo, docIndexRepo, 'eve', 'year-planner', 'planners', 'p1',
         { title: 'Jan' });
       await seedUserDoc(syncRepo, docIndexRepo, 'eve', 'year-planner', 'planners', 'p2',

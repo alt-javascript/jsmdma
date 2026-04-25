@@ -62,10 +62,10 @@ export default class AppSyncController {
 
   /**
    * POST /:application/sync
-   * @param {{ body: Object, params: Object, headers: Object, honoCtx: import('hono').Context }} request
+   * @param {{ body: Object, params: Object, headers: Object, identity: Object }} request
    */
   async sync(request) {
-    const { body, params, headers, honoCtx } = request ?? {};
+    const { body, params, headers, identity } = request ?? {};
 
     if (!this.appSyncService || typeof this.appSyncService.sync !== 'function') {
       this.logger?.error?.('[AppSyncController] appSyncService is not wired');
@@ -74,7 +74,7 @@ export default class AppSyncController {
 
     let response;
     try {
-      response = await this.appSyncService.sync({ body, params, headers, honoCtx });
+      response = await this.appSyncService.sync({ body, params, headers, identity });
     } catch (error) {
       this.logger?.error?.(`[AppSyncController] appSyncService.sync threw: ${error?.message ?? error}`);
       return failure(500, 'Sync failed');

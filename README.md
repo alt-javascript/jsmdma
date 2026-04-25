@@ -25,11 +25,7 @@ Users can belong to **organisations** — app-agnostic named groups. An org memb
 | [`packages/core`](packages/jsmdma-core/) | [`@alt-javascript/jsmdma-core`](https://www.npmjs.com/package/@alt-javascript/jsmdma-core) | Isomorphic: HLC clock, field diff, merge engine, SyncClient (no Node deps) |
 | [`packages/server`](packages/jsmdma-server/) | [`@alt-javascript/jsmdma-server`](https://www.npmjs.com/package/@alt-javascript/jsmdma-server) | SyncRepository, SyncService, ApplicationRegistry, SchemaValidator |
 | [`packages/hono`](packages/jsmdma-hono/) | [`@alt-javascript/jsmdma-hono`](https://www.npmjs.com/package/@alt-javascript/jsmdma-hono) | AppSyncController — Hono route wiring |
-| [`packages/auth-core`](packages/jsmdma-auth-core/) | [`@alt-javascript/jsmdma-auth-core`](https://www.npmjs.com/package/@alt-javascript/jsmdma-auth-core) | JWT session helpers, OAuth provider errors |
-| [`packages/auth-server`](packages/jsmdma-auth-server/) | [`@alt-javascript/jsmdma-auth-server`](https://www.npmjs.com/package/@alt-javascript/jsmdma-auth-server) | UserRepository, AuthService, OrgRepository, OrgService |
-| [`packages/auth-hono`](packages/jsmdma-auth-hono/) | [`@alt-javascript/jsmdma-auth-hono`](https://www.npmjs.com/package/@alt-javascript/jsmdma-auth-hono) | AuthMiddlewareRegistrar, AuthController, OrgController |
 | [`packages/example`](packages/example/) | — (private) | Runnable sync demos: `run.js`, `run-apps.js` |
-| [`packages/example-auth`](packages/example-auth/) | — (private) | Runnable auth lifecycle demo |
 
 ---
 
@@ -63,9 +59,6 @@ packages/
   core/        — Isomorphic: HLC clock, field diff, merge engine, text auto-merge (no Node deps)
   server/      — SyncRepository, SyncService, ApplicationRegistry, SchemaValidator
   hono/        — AppSyncController wired into boot-hono CDI context
-  auth-core/   — JWT session, provider errors
-  auth-hono/   — AuthMiddlewareRegistrar, AuthController, OrgController
-  auth-server/ — UserRepository, AuthService, OrgRepository, OrgService
   example/     — Offline-first demo (run.js) and multi-app + org demo (run-apps.js)
 ```
 
@@ -89,6 +82,7 @@ packages/
 - **[Data Model](docs/data-model.md)** — document structure, DocIndex schema, storage namespace layout, and relationship design
 - **[OpenAPI Spec](docs/openapi.yaml)** — machine-readable API description (OpenAPI 3.1.0) covering all endpoints
 - **[M011 Migration Contract](docs/migration-contract-m011.md)** — breaking changes, old-to-new mapping, and executable Node↔Lambda parity verification matrix (`test:parity`, `test:lambda-entrypoint`)
+- **[M013 Migration Contract](docs/migration-contract-m013.md)** — auth package removal, boot-first identity migration, and old-to-new API mapping for consumers upgrading past M013
 - **[Year Planner Integration](docs/year-planner-integration.md)** — worked example integrating the API with a calendar/planner front-end
 - **[Architecture Decision Records](docs/decisions/)** — ADR-001 through ADR-019 capturing key design choices
 
@@ -316,33 +310,7 @@ npm run -w packages/example test:lambda-entrypoint
 
 # Node↔Lambda parity matrix verification (401/403/400/404/5xx redaction)
 npm run -w packages/example test:parity
-
-# Auth lifecycle demo
-node packages/example-auth/run.js
 ```
-
----
-
-## Auth API
-
-### Endpoints (split-flow topology)
-
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| `GET` | `/oauth/:provider/authorize` | — | Browser redirect start. Returns `302` with `Location`/`Set-Cookie`. |
-| `GET` | `/oauth/:provider/callback` | — | Callback consume with typed envelopes (`oauth_callback_accepted`, `invalid_state`, `replay_detected`). |
-| `GET` | `/auth/:provider` | — | Transaction start JSON (`{ authorizationURL, state }`) for client-driven finalize flows. |
-| `POST` | `/auth/login/finalize` | — | Complete login from `{ provider, state, code }`; mode-aware (`bearer`, `cookie`, `session` alias). |
-| `GET` | `/auth/me` | ✅ | Current user/session projection; typed mode/session mismatch reasons when applicable. |
-| `POST` | `/auth/link/finalize` | ✅ | Link a second provider with typed lifecycle envelopes. |
-| `DELETE` | `/auth/unlink/:provider` | ✅ | Remove a provider. Returns typed `last_provider_lockout` on final-provider attempts. |
-| `POST` | `/auth/signout` | ✅ | Mode-aware signout and stale-session invalidation. |
-
-**Supported providers:** `google`, `github`, `microsoft`, `apple`
-
-### JWT Session
-
-Sessions are stateless HS256 JWTs (bearer or cookie/session mode). Idle TTL: 3 days. Hard TTL: 7 days. Rolling refresh via `X-Auth-Token` response header when idle for more than 1 hour.
 
 ---
 

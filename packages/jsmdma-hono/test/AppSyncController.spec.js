@@ -1,10 +1,10 @@
 /**
  * AppSyncController.spec.js — Integration tests for AppSyncController
  *
- * Full CDI stack: AuthMiddlewareRegistrar → AppSyncController → AppSyncService
+ * Full CDI stack: OAuthSessionMiddleware → AppSyncController → AppSyncService
  *                  → SyncService → SyncRepository
  * Uses Hono's app.request() — no real HTTP server.
- * Uses JwtSession.sign() to mint test tokens.
+ * Uses mintTestToken() to mint test tokens via boot's OAuthSessionEngine.
  */
 import { assert } from 'chai';
 import '@alt-javascript/jsnosqlc-memory';
@@ -12,6 +12,7 @@ import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
 import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
+import { OAuthSessionMiddleware } from '@alt-javascript/boot-oauth';
 import {
   SyncRepository,
   SyncService,
@@ -20,17 +21,13 @@ import {
   SchemaValidator,
   DocumentIndexRepository,
 } from '@alt-javascript/jsmdma-server';
-import { AuthMiddlewareRegistrar } from '@alt-javascript/jsmdma-auth-hono';
-import {
-  OrgRepository, OrgService, UserRepository,
-} from '@alt-javascript/jsmdma-auth-server';
-import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
+import { OrgRepository, OrgService } from '@alt-javascript/jsmdma-server';
+import { UserRepository } from '@alt-javascript/jsmdma-server';
 import { HLC } from '@alt-javascript/jsmdma-core';
+import { mintTestToken, TestOAuthSessionEngine } from './helpers/mintTestToken.js';
 import AppSyncController from '../AppSyncController.js';
 
 // ── constants ─────────────────────────────────────────────────────────────────
-
-const JWT_SECRET = 'test-secret-at-least-32-chars-long!!';
 
 const APPLICATIONS_CONFIG = {
   todo:            {
@@ -52,10 +49,9 @@ const APPLICATIONS_CONFIG = {
 };
 
 const BASE_CONFIG = {
-  boot:         { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
+  boot:         { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' }, oauth: { session: { publicPaths: ['/health'] } } },
   logging:      { level: { ROOT: 'error' } },
   server:       { port: 0 },
-  auth:         { jwt: { secret: JWT_SECRET } },
   applications: APPLICATIONS_CONFIG,
 };
 
@@ -77,9 +73,10 @@ async function buildContext() {
     { Reference: UserRepository,  name: 'userRepository',  scope: 'singleton' },
     { Reference: OrgRepository,   name: 'orgRepository',   scope: 'singleton' },
     { Reference: OrgService,      name: 'orgService',      scope: 'singleton' },
+    // OAuthSessionMiddleware requires oauthSessionEngine CDI bean
+    { Reference: TestOAuthSessionEngine, name: 'oauthSessionEngine', scope: 'singleton' },
     // Auth middleware MUST come before AppSyncController
-    { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
-      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
+    { Reference: OAuthSessionMiddleware, name: 'oauthSessionMiddleware', scope: 'singleton' },
     { Reference: AppSyncController, name: 'appSyncController', scope: 'singleton' },
   ]);
 
@@ -96,11 +93,12 @@ async function buildContextWithoutAppSyncService() {
   const context = new Context([
     ...honoStarter(),
     ...jsnosqlcAutoConfiguration(),
-    { Reference: UserRepository, name: 'userRepository', scope: 'singleton' },
     { Reference: OrgRepository,  name: 'orgRepository',  scope: 'singleton' },
     { Reference: OrgService,     name: 'orgService',     scope: 'singleton' },
-    { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
-      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
+    // OAuthSessionMiddleware requires oauthSessionEngine CDI bean
+    { Reference: TestOAuthSessionEngine, name: 'oauthSessionEngine', scope: 'singleton' },
+    // Auth middleware MUST come before AppSyncController
+    { Reference: OAuthSessionMiddleware, name: 'oauthSessionMiddleware', scope: 'singleton' },
     { Reference: AppSyncController, name: 'appSyncController', scope: 'singleton' },
   ]);
 
@@ -111,8 +109,8 @@ async function buildContextWithoutAppSyncService() {
   return appCtx;
 }
 
-async function makeToken(userId = 'user-uuid', extra = {}) {
-  return JwtSession.sign({ sub: userId, providers: ['github'], ...extra }, JWT_SECRET);
+function makeToken(userId = 'user-uuid', extra = {}) {
+  return mintTestToken({ userId, ...extra });
 }
 
 async function syncPost(app, application, body, token) {
@@ -199,7 +197,7 @@ describe('AppSyncController (CDI integration)', () => {
         body: {},
         params: {},
         headers: {},
-        honoCtx: { get: () => ({ sub: 'user-1' }) },
+        identity: { userId: 'user-1' },
       });
 
       assert.equal(response.statusCode, 500);
@@ -220,7 +218,7 @@ describe('AppSyncController (CDI integration)', () => {
         body: {},
         params: {},
         headers: {},
-        honoCtx: { get: () => ({ sub: 'user-1' }) },
+        identity: { userId: 'user-1' },
       });
 
       assert.equal(response.statusCode, 500);
@@ -693,9 +691,10 @@ async function buildContextWithDocIndex() {
     { Reference: UserRepository,      name: 'userRepository',      scope: 'singleton' },
     { Reference: OrgRepository,       name: 'orgRepository',       scope: 'singleton' },
     { Reference: OrgService,          name: 'orgService',          scope: 'singleton' },
+    // OAuthSessionMiddleware requires oauthSessionEngine CDI bean
+    { Reference: TestOAuthSessionEngine, name: 'oauthSessionEngine', scope: 'singleton' },
     // Auth middleware MUST come before AppSyncController
-    { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
-      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
+    { Reference: OAuthSessionMiddleware, name: 'oauthSessionMiddleware', scope: 'singleton' },
     // DocumentIndexRepository registered BEFORE AppSyncController so CDI can autowire it
     { Reference: DocumentIndexRepository, name: 'documentIndexRepository', scope: 'singleton' },
     { Reference: AppSyncController,   name: 'appSyncController',   scope: 'singleton' },

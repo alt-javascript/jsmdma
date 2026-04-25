@@ -20,14 +20,24 @@
  *   node packages/example/run.js
  */
 
-import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 import { HLC } from '@alt-javascript/jsmdma-core';
 import { buildSharedNotesStarterApp } from './runtime/sharedNotesStarterApp.js';
+import { OAuthSessionMiddleware } from '@alt-javascript/boot-oauth';
+import { mintTestToken, TestOAuthSessionEngine } from '../jsmdma-hono/test/helpers/mintTestToken.js';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-const JWT_SECRET = 'example-jwt-secret-at-least-32-chars!';
 const APPLICATION = 'shared-notes';
+
+function withTestAuth() {
+  return {
+    hooks: {
+      beforeSync: [
+        { Reference: TestOAuthSessionEngine, name: 'oauthSessionEngine', scope: 'singleton' },
+        { Reference: OAuthSessionMiddleware, name: 'oauthSessionMiddleware', scope: 'singleton' },
+      ],
+    },
+  };
+}
 
 function assert(condition, message) {
   if (!condition) {
@@ -130,15 +140,15 @@ async function main() {
   // ── 1. Start CDI context ──────────────────────────────────────────────────
 
   const { app, appCtx } = await buildSharedNotesStarterApp({
-    jwtSecret: JWT_SECRET,
+    starterOptions: withTestAuth(),
   });
 
   console.log('\n  ✓ Hono server ready (CDI, in-memory NoSQL, auth middleware)');
 
   // Mint JWT tokens — same user ID on two devices (the canonical offline-first scenario)
   const USER_ID = 'shared-user-uuid';
-  const tokenA = await JwtSession.sign({ sub: USER_ID, providers: ['example'] }, JWT_SECRET);
-  const tokenB = await JwtSession.sign({ sub: USER_ID, providers: ['example'] }, JWT_SECRET);
+  const tokenA = mintTestToken({ userId: USER_ID });
+  const tokenB = mintTestToken({ userId: USER_ID });
 
   // ── 2. Establish shared starting document ─────────────────────────────────
 

@@ -21,8 +21,8 @@ import DocumentIndexRepository  from '../DocumentIndexRepository.js';
 import ApplicationRegistry      from '../ApplicationRegistry.js';
 import ExportService            from '../ExportService.js';
 // Auth-server packages sit in a sibling workspace
-import UserRepository from '../../jsmdma-auth-server/UserRepository.js';
-import OrgRepository  from '../../jsmdma-auth-server/OrgRepository.js';
+import UserRepository from '../UserRepository.js';
+import OrgRepository  from '../OrgRepository.js';
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -80,7 +80,7 @@ describe('ExportService', () => {
         'year-planner': { collections: { planners: {} } },
       });
 
-      await userRepo.create('alice', 'alice@example.com', 'local', 'alice');
+      await userRepo.create('alice', 'alice@example.com', [{ provider: 'local', providerUserId: 'alice' }]);
       await seedUserDoc(syncRepo, docIndexRepo, 'alice', 'year-planner', 'planners', 'doc-1',
         { title: 'Q1 plan' });
 
@@ -101,7 +101,7 @@ describe('ExportService', () => {
         'year-planner': { collections: { planners: {}, notes: {} } },
       });
 
-      await userRepo.create('alice', 'alice@example.com', 'local', 'alice');
+      await userRepo.create('alice', 'alice@example.com', [{ provider: 'local', providerUserId: 'alice' }]);
       await seedUserDoc(syncRepo, docIndexRepo, 'alice', 'year-planner', 'planners', 'p1',
         { title: 'Planner doc' });
       await seedUserDoc(syncRepo, docIndexRepo, 'alice', 'year-planner', 'notes', 'n1',
@@ -122,7 +122,7 @@ describe('ExportService', () => {
         'todo-app':     { collections: { tasks: {} } },
       });
 
-      await userRepo.create('alice', 'alice@example.com', 'local', 'alice');
+      await userRepo.create('alice', 'alice@example.com', [{ provider: 'local', providerUserId: 'alice' }]);
       // Only seed data in year-planner — todo-app stays empty
       await seedUserDoc(syncRepo, docIndexRepo, 'alice', 'year-planner', 'planners', 'p1',
         { title: 'My plan' });
@@ -138,7 +138,7 @@ describe('ExportService', () => {
         'year-planner': { collections: { planners: {} } },
       });
 
-      await userRepo.create('alice', 'alice@example.com', 'local', 'alice');
+      await userRepo.create('alice', 'alice@example.com', [{ provider: 'local', providerUserId: 'alice' }]);
       await seedUserDoc(syncRepo, docIndexRepo, 'alice', 'year-planner', 'planners', 'doc-1',
         { title: 'First' });
       await seedUserDoc(syncRepo, docIndexRepo, 'alice', 'year-planner', 'planners', 'doc-2',

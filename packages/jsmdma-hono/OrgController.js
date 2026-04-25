@@ -1,7 +1,7 @@
 /**
  * OrgController.js — Hono controller for organisation management.
  *
- * Routes (all require JWT auth via AuthMiddlewareRegistrar):
+ * Routes (all require boot session auth via OAuthSessionMiddleware):
  *   POST   /orgs                        — create organisation
  *   GET    /orgs                        — list caller's organisations
  *   GET    /orgs/:orgId/members         — list members (membership required)
@@ -31,7 +31,7 @@ import {
   AlreadyMemberError,
   NotMemberError,
   DuplicateOrgNameError,
-} from '@alt-javascript/jsmdma-auth-server';
+} from '@alt-javascript/jsmdma-server';
 
 export default class OrgController {
   static __routes = [
@@ -54,7 +54,7 @@ export default class OrgController {
   // ── helpers ───────────────────────────────────────────────────────────────
 
   _getUser(request) {
-    return request.honoCtx?.get?.('user') ?? null;
+    return request.identity ?? null;
   }
 
   _mapError(err) {
@@ -88,8 +88,8 @@ export default class OrgController {
     }
 
     try {
-      const { org, membership } = await this.orgService.createOrg(user.sub, name);
-      this.logger?.info?.(`[OrgController] createOrg orgId=${org.orgId} userId=${user.sub}`);
+      const { org, membership } = await this.orgService.createOrg(user.userId, name);
+      this.logger?.info?.(`[OrgController] createOrg orgId=${org.orgId} userId=${user.userId}`);
       return { statusCode: 201, body: { orgId: org.orgId, name: org.name, role: membership.role } };
     } catch (err) {
       return this._mapError(err);
@@ -104,7 +104,7 @@ export default class OrgController {
     const user = this._getUser(request);
     if (!user) return { statusCode: 401, body: { error: 'Authentication required' } };
 
-    const memberships = await this.orgService.listUserOrgs(user.sub);
+    const memberships = await this.orgService.listUserOrgs(user.userId);
     return { orgs: memberships };
   }
 
@@ -119,7 +119,7 @@ export default class OrgController {
     const { orgId } = request.params;
 
     try {
-      const members = await this.orgService.listOrgMembers(user.sub, orgId);
+      const members = await this.orgService.listOrgMembers(user.userId, orgId);
       return { members };
     } catch (err) {
       return this._mapError(err);
@@ -147,8 +147,8 @@ export default class OrgController {
     }
 
     try {
-      const member = await this.orgService.addMember(user.sub, orgId, userId, role);
-      this.logger?.info?.(`[OrgController] addMember orgId=${orgId} userId=${userId} by=${user.sub}`);
+      const member = await this.orgService.addMember(user.userId, orgId, userId, role);
+      this.logger?.info?.(`[OrgController] addMember orgId=${orgId} userId=${userId} by=${user.userId}`);
       return { member };
     } catch (err) {
       return this._mapError(err);
@@ -172,8 +172,8 @@ export default class OrgController {
     }
 
     try {
-      const member = await this.orgService.setMemberRole(user.sub, orgId, userId, role);
-      this.logger?.info?.(`[OrgController] setRole orgId=${orgId} userId=${userId} role=${role} by=${user.sub}`);
+      const member = await this.orgService.setMemberRole(user.userId, orgId, userId, role);
+      this.logger?.info?.(`[OrgController] setRole orgId=${orgId} userId=${userId} role=${role} by=${user.userId}`);
       return { member };
     } catch (err) {
       return this._mapError(err);
@@ -191,8 +191,8 @@ export default class OrgController {
     const { orgId, userId } = request.params;
 
     try {
-      await this.orgService.removeMember(user.sub, orgId, userId);
-      this.logger?.info?.(`[OrgController] removeMember orgId=${orgId} userId=${userId} by=${user.sub}`);
+      await this.orgService.removeMember(user.userId, orgId, userId);
+      this.logger?.info?.(`[OrgController] removeMember orgId=${orgId} userId=${userId} by=${user.userId}`);
       return { removed: true };
     } catch (err) {
       return this._mapError(err);

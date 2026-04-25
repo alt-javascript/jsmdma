@@ -2,11 +2,11 @@
  * ExportController.spec.js — CDI integration tests for ExportController.
  *
  * Full CDI stack:
- *   AuthMiddlewareRegistrar → ExportController → ExportService
+ *   OAuthSessionMiddleware → ExportController → ExportService
  *   → SyncRepository + DocumentIndexRepository + OrgRepository + UserRepository
  *
  * Uses Hono's app.request() — no real HTTP server.
- * Uses JwtSession.sign() to mint test tokens.
+ * Uses mintTestToken() to mint test tokens via boot's OAuthSessionEngine.
  * Seeds data via AppSyncController (same syncPost helper as SearchController.spec.js).
  *
  * Test matrix:
@@ -30,20 +30,19 @@ import { Context, ApplicationContext } from '@alt-javascript/cdi';
 import { EphemeralConfig } from '@alt-javascript/config';
 import { honoStarter } from '@alt-javascript/boot-hono';
 import { jsnosqlcAutoConfiguration } from '@alt-javascript/boot-jsnosqlc';
+import { OAuthSessionMiddleware } from '@alt-javascript/boot-oauth';
 import {
   SyncRepository, SyncService, AppSyncService, ExportService,
   ApplicationRegistry, SchemaValidator, DocumentIndexRepository,
+  OrgRepository, OrgService,
 } from '@alt-javascript/jsmdma-server';
-import { AuthMiddlewareRegistrar } from '@alt-javascript/jsmdma-auth-hono';
-import { UserRepository, OrgRepository, OrgService } from '@alt-javascript/jsmdma-auth-server';
-import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
+import { UserRepository } from '@alt-javascript/jsmdma-server';
 import { HLC } from '@alt-javascript/jsmdma-core';
+import { mintTestToken, TestOAuthSessionEngine } from './helpers/mintTestToken.js';
 import AppSyncController from '../AppSyncController.js';
 import ExportController  from '../ExportController.js';
 
 // ── constants ─────────────────────────────────────────────────────────────────
-
-const JWT_SECRET = 'test-secret-at-least-32-chars-long!!';
 
 const APPLICATIONS_CONFIG = {
   'year-planner': {
@@ -57,7 +56,6 @@ const BASE_CONFIG = {
   boot:         { 'banner-mode': 'off', nosql: { url: 'jsnosqlc:memory:' } },
   logging:      { level: { ROOT: 'error' } },
   server:       { port: 0 },
-  auth:         { jwt: { secret: JWT_SECRET } },
   applications: APPLICATIONS_CONFIG,
 };
 
@@ -65,7 +63,7 @@ const BASE_CONFIG = {
 
 /**
  * Build a full CDI context with ExportController and AppSyncController.
- * CDI order: ExportService → AuthMiddlewareRegistrar → ExportController
+ * CDI order: ExportService → OAuthSessionMiddleware → ExportController
  */
 async function buildContext() {
   const config = new EphemeralConfig(BASE_CONFIG);
@@ -85,12 +83,12 @@ async function buildContext() {
     { Reference: OrgRepository,           name: 'orgRepository',           scope: 'singleton' },
     { Reference: OrgService,              name: 'orgService',              scope: 'singleton' },
     { Reference: DocumentIndexRepository, name: 'documentIndexRepository', scope: 'singleton' },
-    // Auth middleware MUST come before controllers
-    { Reference: AuthMiddlewareRegistrar, name: 'authMiddlewareRegistrar', scope: 'singleton',
-      properties: [{ name: 'jwtSecret', path: 'auth.jwt.secret' }] },
+    // OAuthSessionMiddleware requires oauthSessionEngine CDI bean
+    { Reference: TestOAuthSessionEngine,  name: 'oauthSessionEngine',      scope: 'singleton' },
+    { Reference: OAuthSessionMiddleware,  name: 'oauthSessionMiddleware',  scope: 'singleton' },
     // AppSyncController for seeding test data via HTTP
     { Reference: AppSyncController,       name: 'appSyncController',       scope: 'singleton' },
-    // ExportController AFTER AuthMiddlewareRegistrar
+    // ExportController AFTER OAuthSessionMiddleware
     { Reference: ExportController,        name: 'exportController',        scope: 'singleton' },
   ]);
 
@@ -101,8 +99,8 @@ async function buildContext() {
   return appCtx;
 }
 
-async function makeToken(userId = 'user-uuid', extra = {}) {
-  return JwtSession.sign({ sub: userId, providers: ['github'], ...extra }, JWT_SECRET);
+function makeToken(userId = 'user-uuid', extra = {}) {
+  return mintTestToken({ userId, ...extra });
 }
 
 /** GET /account/export */

@@ -3,7 +3,7 @@
  *
  * This class extracts orchestration concerns out of the HTTP adapter so they
  * can be tested without transport noise:
- *   - auth guard extraction from honoCtx
+ *   - auth guard extraction from identity (request.identity)
  *   - application allowlist checks
  *   - org-membership enforcement for x-org-id scope
  *   - schema validation fan-out over incoming changes
@@ -71,18 +71,17 @@ export default class AppSyncService {
   }
 
   /**
-   * @param {{ body: Object, params: Object, headers: Object, honoCtx: import('hono').Context }} request
+   * @param {{ body: Object, params: Object, headers: Object, identity: Object }} request
    * @returns {Promise<{ statusCode: number, body: object }>}
    */
   async sync(request) {
-    const { body, params, headers, honoCtx } = request ?? {};
+    const { body, params, headers, identity } = request ?? {};
 
     // ── Auth guard ──────────────────────────────────────────────────────────
-    const userPayload = honoCtx?.get?.('user') ?? null;
-    if (!userPayload || !userPayload.sub) {
+    if (!identity || !identity.userId) {
       return failure(401, 'Authentication required');
     }
-    const userId = userPayload.sub;
+    const userId = identity.userId;
 
     // ── Application allowlist ──────────────────────────────────────────────
     const application = params?.application;

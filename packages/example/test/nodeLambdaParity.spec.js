@@ -1,8 +1,7 @@
 import { assert } from 'chai';
-import { JwtSession } from '@alt-javascript/jsmdma-auth-core';
 import { HLC } from '@alt-javascript/jsmdma-core';
+import { OAuthSessionMiddleware } from '@alt-javascript/boot-oauth';
 import {
-  FULL_STACK_JWT_SECRET,
   FULL_STACK_STARTER_OPTIONS,
   buildFullStackStarterApp,
 } from '../runtime/fullStackStarterApp.js';
@@ -15,6 +14,7 @@ import {
   parseApiGatewayV2JsonResponse,
   resetApiGatewayV2EventSequenceForTests,
 } from './lambdaEventV2.js';
+import { mintTestToken, TestOAuthSessionEngine } from '../../jsmdma-hono/test/helpers/mintTestToken.js';
 
 const PARITY_USERS = Object.freeze({
   owner: 'parity-owner-user',
@@ -39,6 +39,10 @@ class ParityThrowController {
 
 const PARITY_STARTER_OPTIONS = {
   hooks: {
+    beforeSync: [
+      { Reference: TestOAuthSessionEngine, name: 'oauthSessionEngine', scope: 'singleton' },
+      { Reference: OAuthSessionMiddleware,  name: 'oauthSessionMiddleware',  scope: 'singleton' },
+    ],
     afterAppSync: [
       ...FULL_STACK_STARTER_OPTIONS.hooks.afterAppSync,
       ParityThrowController,
@@ -131,31 +135,19 @@ function expectParityEnvelope({
 }
 
 async function seedRuntime({ runtime, label }) {
-  let userRepository;
   let orgRepository;
 
   try {
-    userRepository = runtime.appCtx.get('userRepository');
     orgRepository = runtime.appCtx.get('orgRepository');
   } catch (err) {
-    throw new Error(`[parity:${label}:setup] Missing userRepository/orgRepository dependencies`, { cause: err });
+    throw new Error(`[parity:${label}:setup] Missing orgRepository dependency`, { cause: err });
   }
 
-  if (!userRepository || !orgRepository) {
-    throw new Error(`[parity:${label}:setup] userRepository/orgRepository not available on appCtx`);
+  if (!orgRepository) {
+    throw new Error(`[parity:${label}:setup] orgRepository not available on appCtx`);
   }
 
   try {
-    for (const userId of Object.values(PARITY_USERS)) {
-      await userRepository._users().store(userId, {
-        userId,
-        email: `${userId}@example.com`,
-        providers: ['test'],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-    }
-
     await orgRepository.createOrg(PARITY_ORG_ID, PARITY_ORG_NAME, PARITY_USERS.owner);
     await orgRepository.createMember(PARITY_ORG_ID, PARITY_USERS.owner, 'org-admin');
     await orgRepository.createMember(PARITY_ORG_ID, PARITY_USERS.member, 'member');
@@ -164,7 +156,7 @@ async function seedRuntime({ runtime, label }) {
       orgId: PARITY_ORG_ID,
     };
   } catch (err) {
-    throw new Error(`[parity:${label}:setup] Failed while seeding users/org membership: ${err.message}`, { cause: err });
+    throw new Error(`[parity:${label}:setup] Failed while seeding org membership: ${err.message}`, { cause: err });
   }
 }
 
@@ -291,10 +283,10 @@ describe('node↔lambda parity matrix (packages/example)', function nodeLambdaPa
     );
 
     tokens = {
-      owner: await JwtSession.sign({ sub: PARITY_USERS.owner, providers: ['test'] }, FULL_STACK_JWT_SECRET),
-      member: await JwtSession.sign({ sub: PARITY_USERS.member, providers: ['test'] }, FULL_STACK_JWT_SECRET),
-      nonMember: await JwtSession.sign({ sub: PARITY_USERS.nonMember, providers: ['test'] }, FULL_STACK_JWT_SECRET),
-      schema: await JwtSession.sign({ sub: PARITY_USERS.schema, providers: ['test'] }, FULL_STACK_JWT_SECRET),
+      owner:     mintTestToken({ userId: PARITY_USERS.owner }),
+      member:    mintTestToken({ userId: PARITY_USERS.member }),
+      nonMember: mintTestToken({ userId: PARITY_USERS.nonMember }),
+      schema:    mintTestToken({ userId: PARITY_USERS.schema }),
     };
   });
 
@@ -305,7 +297,7 @@ describe('node↔lambda parity matrix (packages/example)', function nodeLambdaPa
     resetApiGatewayV2EventSequenceForTests();
   });
 
-  it('keeps unauthenticated POST /todo/sync equivalent at 401 unauthorized', async () => {
+  it('keeps unauthenticated POST /todo/sync equivalent at 401 when no token is provided', async () => {
     const { nodeResult, lambdaResult } = await runParityProbe({
       nodeRuntime,
       lambdaRuntime,
@@ -320,7 +312,7 @@ describe('node↔lambda parity matrix (packages/example)', function nodeLambdaPa
     expectParityEnvelope({
       label: 'todo-sync-unauth',
       expectedStatusCode: 401,
-      expectedCode: 'unauthorized',
+      expectedCode: 'session_required',
       expectedError: 'Unauthorized',
       nodeResult,
       lambdaResult,
@@ -427,6 +419,7 @@ describe('node↔lambda parity matrix (packages/example)', function nodeLambdaPa
       request: {
         method: 'POST',
         path: '/_parity/throw',
+        headers: withAuth(tokens.owner),
       },
     });
 

@@ -6,7 +6,12 @@ import AppSyncService from '../AppSyncService.js';
 
 function makeRequest(overrides = {}) {
   const has = (key) => Object.prototype.hasOwnProperty.call(overrides, key);
-  const user = has('user') ? overrides.user : { sub: 'user-1' };
+
+  // AppSyncService reads request.identity.userId (migrated in commit 040d8e1).
+  // When `user: null` is explicitly supplied, produce no identity → triggers 401.
+  const identity = has('user')
+    ? (overrides.user == null ? null : { userId: overrides.user.sub ?? 'user-1' })
+    : { userId: 'user-1' };
 
   return {
     params: { application: 'todo', ...(overrides.params ?? {}) },
@@ -18,13 +23,7 @@ function makeRequest(overrides = {}) {
         clientClock: '0000000000000-000000-client',
         changes: [],
       },
-    honoCtx: has('honoCtx')
-      ? overrides.honoCtx
-      : {
-        get(key) {
-          return key === 'user' ? user : null;
-        },
-      },
+    identity,
   };
 }
 

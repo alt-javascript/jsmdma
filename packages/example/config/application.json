@@ -3,6 +3,11 @@
     "banner-mode": "off",
     "nosql": {
       "url": "jsnosqlc:memory:"
+    },
+    "oauth": {
+      "session": {
+        "publicPaths": ["/health"]
+      }
     }
   },
   "logging": {

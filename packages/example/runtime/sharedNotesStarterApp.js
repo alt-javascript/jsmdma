@@ -7,7 +7,6 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-export const SHARED_NOTES_JWT_SECRET = 'example-jwt-secret-at-least-32-chars!';
 export const SHARED_NOTES_APPLICATION = 'shared-notes';
 export const SHARED_NOTES_PACKAGE_BASE_PATH = fileURLToPath(new URL('..', import.meta.url));
 
@@ -50,11 +49,9 @@ export const SHARED_NOTES_APPLICATIONS_CONFIG = {
 };
 
 export function createSharedNotesConfig({
-  jwtSecret = SHARED_NOTES_JWT_SECRET,
   applicationsConfig = SHARED_NOTES_APPLICATIONS_CONFIG,
 } = {}) {
   return {
-    auth: { jwt: { secret: jwtSecret } },
     applications: applicationsConfig,
     orgs: { registerable: false },
   };
@@ -71,7 +68,6 @@ export function loadSharedNotesConfig({
 }
 
 export async function buildSharedNotesStarterContext({
-  jwtSecret = SHARED_NOTES_JWT_SECRET,
   applicationsConfig = SHARED_NOTES_APPLICATIONS_CONFIG,
   starterOptions = {},
   basePath = SHARED_NOTES_PACKAGE_BASE_PATH,
@@ -81,7 +77,6 @@ export async function buildSharedNotesStarterContext({
   const config = loadSharedNotesConfig({
     basePath,
     overrides: createSharedNotesConfig({
-      jwtSecret,
       applicationsConfig,
     }),
   });

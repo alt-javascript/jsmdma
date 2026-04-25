@@ -38,17 +38,12 @@ node packages/example/run-apps.js  # multi-app + org demo
 | `packages/core` | `@alt-javascript/jsmdma-core` | Isomorphic: HLC clock, field diff, merge, textMerge, flatten (zero Node deps) |
 | `packages/server` | `@alt-javascript/jsmdma-server` | SyncRepository, SyncService, ApplicationRegistry, SchemaValidator |
 | `packages/hono` | `@alt-javascript/jsmdma-hono` | AppSyncController — Hono route wiring |
-| `packages/auth-core` | `@alt-javascript/jsmdma-auth-core` | JWT session helpers, OAuth provider errors |
-| `packages/auth-server` | `@alt-javascript/jsmdma-auth-server` | UserRepository, AuthService, OrgRepository, OrgService |
-| `packages/auth-hono` | `@alt-javascript/jsmdma-auth-hono` | AuthMiddlewareRegistrar, AuthController, OrgController |
 | `packages/example` | — | Runnable sync demos |
-| `packages/example-auth` | — | Runnable auth demo |
 
 ## Architecture Notes
 
 - **HLC strings** are lexicographically ordered hex (`<13-hex-ms>-<6-hex-seq>-<node>`), usable directly as NoSQL sort keys and in range queries.
 - **Conflict resolution:** per-field HLC comparison → text auto-merge for strings with non-overlapping line changes → higher-HLC wins fallback.
 - **Storage keys** are namespaced as `{userId}:{app}:{collection}` (personal) or `org:{orgId}:{app}:{collection}` (org-scoped). Colons in segment values are percent-encoded.
-- **CDI ordering matters:** `AuthMiddlewareRegistrar` must be registered before any controllers in the Context array (Hono registers middleware in insertion order).
 - **Application config** declares valid app paths; unknown app names → 404. Collections can have inline JSON Schema or `schemaPath` for validation.
 - **core package is isomorphic** — must stay free of Node-specific dependencies so it can run in browsers.
